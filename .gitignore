@@ -4,7 +4,6 @@
 # Node / CDK
 *.js
 !jest.config.js
-!lambda/**/*.js
 *.d.ts
 node_modules
 
@@ -12,6 +11,13 @@ node_modules
 .cdk.staging
 cdk.out
 
+# Lambda bundle output (lambda/<name>/dist)
+dist/
+
 # Test coverage reports
 coverage/
 insecure-synth.log
+
+# Local env / credentials
+.env
+.env.*

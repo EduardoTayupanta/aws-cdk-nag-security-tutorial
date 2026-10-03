@@ -43,7 +43,11 @@ export class InsecureStack extends Stack {
     appRole.addManagedPolicy(ManagedPolicy.fromAwsManagedPolicyName('AmazonS3FullAccess'));
     appRole.addToPolicy(new PolicyStatement({ actions: ['s3:*'], resources: ['*'] }));
 
-    // AwsSolutions-L1 → runtime is not the latest in its family
+    // AwsSolutions-L1 → runtime is not the latest in its family.
+    // Deliberately a zip function with a one-line inline handler: L1 only
+    // applies to zip-packaged functions, and this fixture is never deployed.
+    // The real handler (TypeScript, arm64 container image) is lambda/reader,
+    // used by SecureStack.
     new Function(this, 'ReaderFunction', {
       runtime: Runtime.NODEJS_20_X,
       handler: 'index.handler',

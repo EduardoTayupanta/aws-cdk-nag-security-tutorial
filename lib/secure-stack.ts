@@ -1,9 +1,7 @@
-import * as path from 'path';
 import { Construct } from 'constructs';
-import { Duration, Stack, StackProps, Validations } from 'aws-cdk-lib/core';
+import { CfnOutput, Duration, RemovalPolicy, Stack, StackProps, Validations } from 'aws-cdk-lib/core';
 import { BlockPublicAccess, Bucket, BucketEncryption, CfnBucket, ObjectOwnership } from 'aws-cdk-lib/aws-s3';
 import { PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
-import { Code, Function, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import {
   FlowLogDestination,
@@ -16,6 +14,7 @@ import {
   Vpc,
 } from 'aws-cdk-lib/aws-ec2';
 import { DatabaseInstance, DatabaseInstanceEngine, PostgresEngineVersion, StorageType } from 'aws-cdk-lib/aws-rds';
+import { ReaderFunction } from './constructs/reader-function';
 
 /** Bucket prefix the Lambda can read; nothing outside it. */
 export const READABLE_PREFIX = 'uploads/';
@@ -33,13 +32,22 @@ const DB_LOG_EXPORTS = ['postgresql', 'upgrade'];
  * The tutorial's "AFTER": the same resources as `InsecureStack`, with the same
  * construct IDs, remediated to pass cdk-nag's AwsSolutions rule pack.
  *
- * Only ONE acknowledged exception remains (`Validations.of(...).acknowledge`),
- * with its justification written next to the resource. Everything else is
- * fixed instead of suppressed.
+ * Two acknowledged exceptions remain (`Validations.of(...).acknowledge`), each
+ * scoped to one exact finding with its justification next to the resource:
+ * the `uploads/` prefix (below) and X-Ray's `Resource: "*"` (in
+ * `ReaderFunction`). Everything else is fixed instead of suppressed.
+ *
+ * Demo-only choice: everything uses `RemovalPolicy.DESTROY` (and buckets
+ * auto-delete their objects) so a sandbox deploy can be torn down cleanly.
+ * Production data stores would use `RETAIN` / `SNAPSHOT`. Deletion
+ * protection stays on for the database, because that IS the RDS10 lesson;
+ * see the README's "Tear It Down" section.
  */
 export class SecureStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
+
+    const removalPolicy = RemovalPolicy.DESTROY;
 
     // ── S3: AwsSolutions-S1 / S2 / S10 ────────────────────────────────────
     // The logs bucket does not need logging itself: rule S1 treats a bucket
@@ -52,6 +60,8 @@ export class SecureStack extends Stack {
       enforceSSL: true,
       objectOwnership: ObjectOwnership.BUCKET_OWNER_ENFORCED,
       lifecycleRules: [{ id: 'expire-access-logs', expiration: Duration.days(365) }],
+      removalPolicy,
+      autoDeleteObjects: true,
     });
 
     const dataBucket = new Bucket(this, 'DataBucket', {
@@ -62,21 +72,18 @@ export class SecureStack extends Stack {
       objectOwnership: ObjectOwnership.BUCKET_OWNER_ENFORCED,
       serverAccessLogsBucket: accessLogsBucket, // S1
       serverAccessLogsPrefix: 'data-bucket/',
+      removalPolicy,
+      autoDeleteObjects: true,
     });
 
     // ── IAM: AwsSolutions-IAM4 / IAM5 ─────────────────────────────────────
     // A dedicated role instead of Lambda's default one: this avoids attaching
-    // the AWSLambdaBasicExecutionRole managed policy (IAM4) and scopes the log
-    // permissions to ONE specific log group.
+    // the AWSLambdaBasicExecutionRole managed policy (IAM4). ReaderFunction
+    // scopes its log permissions to ONE specific log group.
     const appRole = new Role(this, 'AppRole', {
       assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
-      description: 'ReaderFunction role: read uploads/ and write to its own log group.',
+      description: 'ReaderFunction role: read uploads/, write its own log group, send X-Ray traces.',
     });
-
-    const readerLogGroup = new LogGroup(this, 'ReaderLogGroup', {
-      retention: RetentionDays.ONE_MONTH,
-    });
-    readerLogGroup.grantWrite(appRole);
 
     // A single action on a single prefix. `bucket.grantRead()` would also add
     // s3:GetObject*, s3:GetBucket* and s3:List* (more IAM5 findings to
@@ -87,11 +94,12 @@ export class SecureStack extends Stack {
       resources: [dataBucket.arnForObjects(`${READABLE_PREFIX}*`)],
     }));
 
-    // The stack's only exception. In cdk-nag 3.x each finding is acknowledged
-    // separately by its full `Rule[Finding]` ID: a wildcard on any OTHER
-    // resource or action is reported again. It does not cover a new action on
+    // One of the stack's two exceptions (the other, X-Ray's Resource "*", is in
+    // ReaderFunction). In cdk-nag 3.x each finding is acknowledged separately
+    // by its full `Rule[Finding]` ID, so a wildcard on any OTHER resource or
+    // action is reported again. But it also silently covers a NEW action on
     // this same resource (e.g. s3:DeleteObject on uploads/*), which is why
-    // test/secure-stack.test.ts pins s3:GetObject as the role's only S3 action.
+    // test/secure-stack.test.ts pins AppRole's exact statement list.
     Validations.of(appRole).acknowledge({
       id: `AwsSolutions-IAM5[Resource::<${this.getLogicalId(dataBucket.node.defaultChild as CfnBucket)}.Arn>/${READABLE_PREFIX}*]`,
       reason:
@@ -102,16 +110,13 @@ export class SecureStack extends Stack {
     });
 
     // ── Lambda: AwsSolutions-L1 ───────────────────────────────────────────
-    // Runtime pinned explicitly (not NODEJS_LATEST, whose value can change
-    // between aws-cdk-lib releases and silently alter the template).
-    new Function(this, 'ReaderFunction', {
-      runtime: Runtime.NODEJS_24_X,
-      handler: 'index.handler',
-      code: Code.fromAsset(path.join(__dirname, '..', 'lambda', 'reader')),
+    // A container image (arm64, Node.js 22 base image): L1 only applies to
+    // zip-packaged functions, and the runtime version is now the base image
+    // tag in lambda/reader/Dockerfile, kept current by Dependabot.
+    const reader = new ReaderFunction(this, 'ReaderFunction', {
       role: appRole,
-      logGroup: readerLogGroup,
-      timeout: Duration.seconds(10),
       environment: { BUCKET_NAME: dataBucket.bucketName, READ_PREFIX: READABLE_PREFIX },
+      removalPolicy,
     });
 
     // ── VPC: AwsSolutions-VPC7 ────────────────────────────────────────────
@@ -126,6 +131,7 @@ export class SecureStack extends Stack {
         FlowLog: {
           destination: FlowLogDestination.toCloudWatchLogs(new LogGroup(this, 'VpcFlowLogGroup', {
             retention: RetentionDays.ONE_YEAR,
+            removalPolicy,
           })),
         },
       },
@@ -154,6 +160,7 @@ export class SecureStack extends Stack {
       iamAuthentication: true,
       backupRetention: Duration.days(7),
       cloudwatchLogsExports: DB_LOG_EXPORTS,
+      removalPolicy,
     });
 
     // RDS creates its export log groups with "Never expire" retention. Creating
@@ -164,6 +171,7 @@ export class SecureStack extends Stack {
       database.node.addDependency(new LogGroup(dbLogGroups, logType, {
         logGroupName: `/aws/rds/instance/${DB_INSTANCE_IDENTIFIER}/${logType}`,
         retention: RetentionDays.ONE_MONTH,
+        removalPolicy,
       }));
     }
     // SMG4: automatic rotation of the master password.
@@ -183,5 +191,11 @@ export class SecureStack extends Stack {
       endpoint: secretsManagerEndpoint,
       securityGroup: rotationSecurityGroup,
     });
+
+    // ── Outputs for the end-to-end walkthrough (README, "Try It End to End") ──
+    new CfnOutput(this, 'DataBucketName', { value: dataBucket.bucketName });
+    new CfnOutput(this, 'ReaderFunctionName', { value: reader.fn.functionName });
+    new CfnOutput(this, 'DatabaseInstanceIdentifier', { value: DB_INSTANCE_IDENTIFIER });
+    new CfnOutput(this, 'DatabaseSecretArn', { value: database.secret!.secretArn });
   }
 }

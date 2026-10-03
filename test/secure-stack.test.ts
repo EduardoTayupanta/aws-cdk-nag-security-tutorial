@@ -22,7 +22,7 @@ describe('SecureStack', () => {
     expect(report.success).toBe(true);
   });
 
-  test('has exactly ONE suppression, scoped to the IAM5 finding for the uploads/ prefix', () => {
+  test('has exactly TWO suppressions, each scoped to one IAM5 finding on AppRole', () => {
     // If someone adds another suppression, this test forces it to be reviewed here.
     const acks = nagAcknowledgmentsIn(stack);
     expect(acks).toEqual([
@@ -31,10 +31,16 @@ describe('SecureStack', () => {
         id: expect.stringMatching(/^AwsSolutions-IAM5\[Resource::<DataBucket[0-9A-F]{8}\.Arn>\/uploads\/\*\]$/),
         reason: expect.any(String),
       },
+      {
+        path: 'SecureStack/AppRole',
+        id: 'AwsSolutions-IAM5[Resource::*]',
+        reason: expect.any(String),
+      },
     ]);
-    // The reason must name what it justifies, not just exist.
+    // Each reason must name what it justifies, not just exist.
     expect(acks[0].reason).toMatch(/s3:GetObject/);
     expect(acks[0].reason).toContain(READABLE_PREFIX);
+    expect(acks[1].reason).toMatch(/xray:PutTraceSegments/);
   });
 
   // ── S3: S1 / S2 / S10 ───────────────────────────────────────────────────
@@ -131,16 +137,19 @@ describe('SecureStack', () => {
     ]);
   });
 
-  test('AppRole can write to ReaderLogGroup, and only to it', () => {
-    // Regression: without grantWrite the function cannot log at runtime, and
-    // neither cdk-nag nor synth notices.
-    const logStatements = appRoleStatements().filter((st) =>
-      [st.Action].flat().some((a: string) => a.startsWith('logs:')));
-    expect(logStatements).toEqual([
+  test('AppRole has exactly three statements: the S3 read, its log group, and X-Ray', () => {
+    // The two acknowledgments are keyed to resources (uploads/* and "*"), so
+    // they would also hide any NEW action on those resources. Pinning the full
+    // statement list makes such a change fail here instead.
+    expect(appRoleStatements()).toEqual([
+      expect.objectContaining({ Sid: 'ReadUploadsPrefixOnly', Action: 's3:GetObject' }),
       expect.objectContaining({
-        Effect: 'Allow',
-        Action: expect.arrayContaining(['logs:CreateLogStream', 'logs:PutLogEvents']),
-        Resource: { 'Fn::GetAtt': [expect.stringMatching(/^ReaderLogGroup/), 'Arn'] },
+        Action: ['logs:CreateLogStream', 'logs:PutLogEvents'],
+        Resource: { 'Fn::GetAtt': [expect.stringMatching(/^ReaderFunctionLogGroup/), 'Arn'] },
+      }),
+      expect.objectContaining({
+        Action: ['xray:PutTelemetryRecords', 'xray:PutTraceSegments'],
+        Resource: '*',
       }),
     ]);
   });
@@ -153,13 +162,14 @@ describe('SecureStack', () => {
     expect(actions.filter((a) => a.endsWith(':*') || a === '*')).toEqual([]);
   });
 
-  // ── Lambda: L1 ──────────────────────────────────────────────────────────
+  // ── Lambda: L1 (container image) ────────────────────────────────────────
+  // The function's own properties are covered in test/constructs/reader-function.test.ts;
+  // here: that the stack wires it to AppRole and the right bucket/prefix.
 
-  test('ReaderFunction uses the latest Node.js runtime and its own log group', () => {
+  test('ReaderFunction runs as AppRole and reads DataBucket under the readable prefix', () => {
     template.hasResourceProperties('AWS::Lambda::Function', Match.objectLike({
-      Runtime: 'nodejs24.x',
+      PackageType: 'Image',
       Role: { 'Fn::GetAtt': [Match.stringLikeRegexp('^AppRole'), 'Arn'] },
-      LoggingConfig: { LogGroup: { Ref: Match.stringLikeRegexp('^ReaderLogGroup') } },
       Environment: {
         Variables: {
           BUCKET_NAME: { Ref: Match.stringLikeRegexp('^DataBucket') },
@@ -269,5 +279,23 @@ describe('SecureStack', () => {
       SecretId: { Ref: Match.stringLikeRegexp('^AppDatabaseSecret') },
       RotationRules: Match.objectLike({ ScheduleExpression: 'rate(30 days)' }),
     }));
+  });
+
+  // ── Demo-only teardown + walkthrough outputs ────────────────────────────
+
+  test('demo stack: buckets auto-delete, every bucket/log group/DB is DESTROY', () => {
+    template.resourceCountIs('Custom::S3AutoDeleteObjects', 2);
+    for (const type of ['AWS::S3::Bucket', 'AWS::Logs::LogGroup', 'AWS::RDS::DBInstance']) {
+      const policies = Object.values(template.findResources(type)).map((r) => r.DeletionPolicy);
+      expect(policies.length).toBeGreaterThan(0);
+      expect(policies).toEqual(policies.map(() => 'Delete'));
+    }
+  });
+
+  test('exposes the outputs the README walkthrough uses', () => {
+    template.hasOutput('DataBucketName', { Value: { Ref: Match.stringLikeRegexp('^DataBucket') } });
+    template.hasOutput('ReaderFunctionName', { Value: { Ref: Match.stringLikeRegexp('^ReaderFunction') } });
+    template.hasOutput('DatabaseInstanceIdentifier', { Value: DB_INSTANCE_IDENTIFIER });
+    template.hasOutput('DatabaseSecretArn', { Value: { Ref: Match.stringLikeRegexp('^AppDatabaseSecret') } });
   });
 });
