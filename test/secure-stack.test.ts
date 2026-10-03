@@ -1,10 +1,15 @@
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { READABLE_PREFIX, SecureStack } from '../lib/secure-stack';
+import { DB_INSTANCE_IDENTIFIER, READABLE_PREFIX, SecureStack } from '../lib/secure-stack';
 import { nagAcknowledgmentsIn, newTestApp, runAwsSolutions } from './helpers';
 
 describe('SecureStack', () => {
   const stack = new SecureStack(newTestApp(), 'SecureStack');
   const template = Template.fromStack(stack);
+
+  /** Every statement in the policies attached to AppRole. */
+  const appRoleStatements = () => Object.values(template.findResources('AWS::IAM::Policy', {
+    Properties: { Roles: [{ Ref: Match.stringLikeRegexp('^AppRole') }] },
+  })).flatMap((p) => p.Properties.PolicyDocument.Statement);
 
   // ── cdk-nag ──────────────────────────────────────────────────────────────
 
@@ -27,13 +32,16 @@ describe('SecureStack', () => {
         reason: expect.any(String),
       },
     ]);
-    expect(acks[0].reason.length).toBeGreaterThan(80);
+    // The reason must name what it justifies, not just exist.
+    expect(acks[0].reason).toMatch(/s3:GetObject/);
+    expect(acks[0].reason).toContain(READABLE_PREFIX);
   });
 
   // ── S3: S1 / S2 / S10 ───────────────────────────────────────────────────
 
-  test('the data bucket blocks public access, is encrypted, and sends access logs to the logs bucket', () => {
+  test('the data bucket blocks public access, is encrypted, versioned, and sends access logs to the logs bucket', () => {
     template.hasResourceProperties('AWS::S3::Bucket', Match.objectLike({
+      VersioningConfiguration: { Status: 'Enabled' },
       PublicAccessBlockConfiguration: {
         BlockPublicAcls: true,
         BlockPublicPolicy: true,
@@ -48,6 +56,21 @@ describe('SecureStack', () => {
       LoggingConfiguration: {
         DestinationBucketName: { Ref: Match.stringLikeRegexp('^AccessLogsBucket') },
         LogFilePrefix: 'data-bucket/',
+      },
+    }));
+  });
+
+  test('the access-logs bucket uses SSE-S3 (required for log delivery), is versioned, and expires logs', () => {
+    template.hasResourceProperties('AWS::S3::Bucket', Match.objectLike({
+      LoggingConfiguration: Match.absent(),
+      VersioningConfiguration: { Status: 'Enabled' },
+      BucketEncryption: Match.objectLike({
+        ServerSideEncryptionConfiguration: [
+          Match.objectLike({ ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } }),
+        ],
+      }),
+      LifecycleConfiguration: {
+        Rules: [Match.objectLike({ Id: 'expire-access-logs', ExpirationInDays: 365, Status: 'Enabled' })],
       },
     }));
   });
@@ -98,6 +121,30 @@ describe('SecureStack', () => {
     }));
   });
 
+  test('s3:GetObject on that prefix is the ONLY S3 permission AppRole has', () => {
+    // The IAM5 acknowledgment is keyed to the resource, so it would also hide
+    // a new action on uploads/* (e.g. s3:DeleteObject). This test does not.
+    const s3Statements = appRoleStatements().filter((st) =>
+      [st.Action].flat().some((a: string) => a.startsWith('s3:')));
+    expect(s3Statements).toEqual([
+      expect.objectContaining({ Sid: 'ReadUploadsPrefixOnly', Action: 's3:GetObject' }),
+    ]);
+  });
+
+  test('AppRole can write to ReaderLogGroup, and only to it', () => {
+    // Regression: without grantWrite the function cannot log at runtime, and
+    // neither cdk-nag nor synth notices.
+    const logStatements = appRoleStatements().filter((st) =>
+      [st.Action].flat().some((a: string) => a.startsWith('logs:')));
+    expect(logStatements).toEqual([
+      expect.objectContaining({
+        Effect: 'Allow',
+        Action: expect.arrayContaining(['logs:CreateLogStream', 'logs:PutLogEvents']),
+        Resource: { 'Fn::GetAtt': [expect.stringMatching(/^ReaderLogGroup/), 'Arn'] },
+      }),
+    ]);
+  });
+
   test('no policy in the stack grants service-wide wildcard actions (e.g. s3:*)', () => {
     const policies = template.findResources('AWS::IAM::Policy');
     const actions = Object.values(policies).flatMap((p) =>
@@ -113,6 +160,12 @@ describe('SecureStack', () => {
       Runtime: 'nodejs24.x',
       Role: { 'Fn::GetAtt': [Match.stringLikeRegexp('^AppRole'), 'Arn'] },
       LoggingConfig: { LogGroup: { Ref: Match.stringLikeRegexp('^ReaderLogGroup') } },
+      Environment: {
+        Variables: {
+          BUCKET_NAME: { Ref: Match.stringLikeRegexp('^DataBucket') },
+          READ_PREFIX: READABLE_PREFIX,
+        },
+      },
     }));
   });
 
@@ -137,6 +190,7 @@ describe('SecureStack', () => {
     const endpointSgs = template.findResources('AWS::EC2::SecurityGroup', {
       Properties: { GroupDescription: Match.stringLikeRegexp('SecretsManagerEndpoint') },
     });
+    expect(Object.keys(endpointSgs)).toHaveLength(1);
     const [endpointSgId] = Object.keys(endpointSgs);
     expect(endpointSgs[endpointSgId].Properties.SecurityGroupIngress).toBeUndefined();
 
@@ -159,6 +213,25 @@ describe('SecureStack', () => {
     }));
   });
 
+  test('the rotation security group only allows egress to the endpoint and the database', () => {
+    const rotationSgs = template.findResources('AWS::EC2::SecurityGroup', {
+      Properties: { GroupDescription: 'Rotation Lambda for the AppDatabase secret' },
+    });
+    expect(Object.keys(rotationSgs)).toHaveLength(1);
+    const [rotationSgId] = Object.keys(rotationSgs);
+
+    // allowAllOutbound: false → no inline 0.0.0.0/0 egress rule, only one
+    // explicit egress rule per allowed target.
+    expect(rotationSgs[rotationSgId].Properties.SecurityGroupEgress).toBeUndefined();
+    const egress = Object.values(template.findResources('AWS::EC2::SecurityGroupEgress', {
+      Properties: { GroupId: { 'Fn::GetAtt': [rotationSgId, 'GroupId'] } },
+    })).map((r) => r.Properties.DestinationSecurityGroupId['Fn::GetAtt'][0]);
+    expect(egress.sort()).toEqual([
+      expect.stringMatching(/^AppDatabaseSecurityGroup/),
+      expect.stringMatching(/^AppVpcSecretsManagerEndpointSecurityGroup/),
+    ]);
+  });
+
   // ── RDS: RDS2 / RDS3 / RDS10 / RDS11 / SMG4 ─────────────────────────────
 
   test('the database is encrypted, deletion-protected, Multi-AZ, and on a non-standard port', () => {
@@ -169,9 +242,26 @@ describe('SecureStack', () => {
       Port: '5433',
       EnableIAMDatabaseAuthentication: true,
       BackupRetentionPeriod: 7,
-      EnableCloudwatchLogsExports: ['postgresql'],
+      EnableCloudwatchLogsExports: ['postgresql', 'upgrade'],
       PubliclyAccessible: false,
+      AllocatedStorage: '20',
+      StorageType: 'gp3',
     }));
+  });
+
+  test.each(['postgresql', 'upgrade'])('the exported %s log group exists before the database, with retention', (logType) => {
+    const logGroups = template.findResources('AWS::Logs::LogGroup', {
+      Properties: { LogGroupName: `/aws/rds/instance/${DB_INSTANCE_IDENTIFIER}/${logType}` },
+    });
+    expect(Object.keys(logGroups)).toHaveLength(1);
+    const [logGroupId] = Object.keys(logGroups);
+    expect(logGroups[logGroupId].Properties.RetentionInDays).toBe(30);
+
+    // RDS would otherwise create it first, with "Never expire" retention.
+    template.hasResource('AWS::RDS::DBInstance', {
+      Properties: Match.objectLike({ DBInstanceIdentifier: DB_INSTANCE_IDENTIFIER }),
+      DependsOn: Match.arrayWith([logGroupId]),
+    });
   });
 
   test('the database master password rotates automatically', () => {

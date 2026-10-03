@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { Construct } from 'constructs';
 import { Duration, Stack, StackProps, Validations } from 'aws-cdk-lib/core';
 import { BlockPublicAccess, Bucket, BucketEncryption, CfnBucket, ObjectOwnership } from 'aws-cdk-lib/aws-s3';
@@ -14,10 +15,19 @@ import {
   SubnetType,
   Vpc,
 } from 'aws-cdk-lib/aws-ec2';
-import { DatabaseInstance, DatabaseInstanceEngine, PostgresEngineVersion } from 'aws-cdk-lib/aws-rds';
+import { DatabaseInstance, DatabaseInstanceEngine, PostgresEngineVersion, StorageType } from 'aws-cdk-lib/aws-rds';
 
 /** Bucket prefix the Lambda can read; nothing outside it. */
 export const READABLE_PREFIX = 'uploads/';
+
+/**
+ * Fixed DB identifier, so the CloudWatch log groups RDS exports to have
+ * predictable names and can be created (with retention) by this stack.
+ */
+export const DB_INSTANCE_IDENTIFIER = 'secure-stack-app-db';
+
+/** PostgreSQL log types exported to CloudWatch Logs. */
+const DB_LOG_EXPORTS = ['postgresql', 'upgrade'];
 
 /**
  * The tutorial's "AFTER": the same resources as `InsecureStack`, with the same
@@ -33,9 +43,11 @@ export class SecureStack extends Stack {
 
     // ── S3: AwsSolutions-S1 / S2 / S10 ────────────────────────────────────
     // The logs bucket does not need logging itself: rule S1 treats a bucket
-    // that is already an access-log destination as compliant.
+    // that is already an access-log destination as compliant. It must use
+    // SSE-S3: S3 server access logging cannot deliver to an SSE-KMS bucket.
     const accessLogsBucket = new Bucket(this, 'AccessLogsBucket', {
       encryption: BucketEncryption.S3_MANAGED,
+      versioned: true,
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
       objectOwnership: ObjectOwnership.BUCKET_OWNER_ENFORCED,
@@ -76,8 +88,10 @@ export class SecureStack extends Stack {
     }));
 
     // The stack's only exception. In cdk-nag 3.x each finding is acknowledged
-    // separately by its full `Rule[Finding]` ID: if someone later adds another
-    // wildcard to this role, cdk-nag reports it again.
+    // separately by its full `Rule[Finding]` ID: a wildcard on any OTHER
+    // resource or action is reported again. It does not cover a new action on
+    // this same resource (e.g. s3:DeleteObject on uploads/*), which is why
+    // test/secure-stack.test.ts pins s3:GetObject as the role's only S3 action.
     Validations.of(appRole).acknowledge({
       id: `AwsSolutions-IAM5[Resource::<${this.getLogicalId(dataBucket.node.defaultChild as CfnBucket)}.Arn>/${READABLE_PREFIX}*]`,
       reason:
@@ -93,19 +107,11 @@ export class SecureStack extends Stack {
     new Function(this, 'ReaderFunction', {
       runtime: Runtime.NODEJS_24_X,
       handler: 'index.handler',
-      code: Code.fromInline([
-        "const { S3Client, HeadObjectCommand } = require('@aws-sdk/client-s3');",
-        'const s3 = new S3Client({});',
-        'exports.handler = async (event) => {',
-        `  const key = '${READABLE_PREFIX}' + event.name;`,
-        '  const head = await s3.send(new HeadObjectCommand({ Bucket: process.env.BUCKET_NAME, Key: key }));',
-        '  return { key, contentLength: head.ContentLength };',
-        '};',
-      ].join('\n')),
+      code: Code.fromAsset(path.join(__dirname, '..', 'lambda', 'reader')),
       role: appRole,
       logGroup: readerLogGroup,
       timeout: Duration.seconds(10),
-      environment: { BUCKET_NAME: dataBucket.bucketName },
+      environment: { BUCKET_NAME: dataBucket.bucketName, READ_PREFIX: READABLE_PREFIX },
     });
 
     // ── VPC: AwsSolutions-VPC7 ────────────────────────────────────────────
@@ -134,8 +140,11 @@ export class SecureStack extends Stack {
 
     // ── RDS: AwsSolutions-RDS2 / RDS10 (+ RDS3, RDS11, SMG4) ──────────────
     const database = new DatabaseInstance(this, 'AppDatabase', {
+      instanceIdentifier: DB_INSTANCE_IDENTIFIER,
       engine: DatabaseInstanceEngine.postgres({ version: PostgresEngineVersion.VER_17 }),
       instanceType: InstanceType.of(InstanceClass.T4G, InstanceSize.MICRO),
+      allocatedStorage: 20,
+      storageType: StorageType.GP3,
       vpc,
       vpcSubnets: { subnetType: SubnetType.PRIVATE_ISOLATED },
       storageEncrypted: true, // RDS2
@@ -144,16 +153,30 @@ export class SecureStack extends Stack {
       port: 5433, // RDS11: non-default port (default is 5432)
       iamAuthentication: true,
       backupRetention: Duration.days(7),
-      cloudwatchLogsExports: ['postgresql'],
+      cloudwatchLogsExports: DB_LOG_EXPORTS,
     });
+
+    // RDS creates its export log groups with "Never expire" retention. Creating
+    // them here first sets a retention period without `cloudwatchLogsRetention`,
+    // whose Custom::LogRetention Lambda would add new IAM4/IAM5 findings.
+    const dbLogGroups = new Construct(this, 'AppDatabaseLogGroups');
+    for (const logType of DB_LOG_EXPORTS) {
+      database.node.addDependency(new LogGroup(dbLogGroups, logType, {
+        logGroupName: `/aws/rds/instance/${DB_INSTANCE_IDENTIFIER}/${logType}`,
+        retention: RetentionDays.ONE_MONTH,
+      }));
+    }
     // SMG4: automatic rotation of the master password.
     // The rotation Lambda runs in the VPC with its own security group, and the
     // Secrets Manager endpoint is opened (443) ONLY to that security group.
+    // `allowAllOutbound: false`: CDK then adds exactly two egress rules, to the
+    // endpoint (443) and to the database port; nothing else.
     // Note: the `endpoint` option only changes the URL the Lambda uses; it does
     // not open the endpoint's security group, which is why the rule is added here.
     const rotationSecurityGroup = new SecurityGroup(this, 'RotationSecurityGroup', {
       vpc,
       description: 'Rotation Lambda for the AppDatabase secret',
+      allowAllOutbound: false,
     });
     secretsManagerEndpoint.connections.allowDefaultPortFrom(rotationSecurityGroup);
     database.addRotationSingleUser({

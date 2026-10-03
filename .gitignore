@@ -4,6 +4,7 @@
 # Node / CDK
 *.js
 !jest.config.js
+!lambda/**/*.js
 *.d.ts
 node_modules
 
@@ -13,3 +14,4 @@ cdk.out
 
 # Test coverage reports
 coverage/
+insecure-synth.log
