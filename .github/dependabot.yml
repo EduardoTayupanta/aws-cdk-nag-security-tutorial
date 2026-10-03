@@ -4,6 +4,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Wait a week before proposing a new release: a buffer against freshly
+    # published malicious versions.
+    cooldown:
+      default-days: 7
     groups:
       aws-cdk:
         patterns: ['aws-cdk', 'aws-cdk-lib', 'constructs', 'cdk-nag']

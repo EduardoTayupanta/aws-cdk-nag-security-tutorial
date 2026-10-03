@@ -51,8 +51,16 @@ jobs:
       # Proves the "before" stack STILL fails: if it ever passed, the tutorial
       # would be showing flaws that cdk-nag no longer detects.
       - name: cdk synth (InsecureStack must fail)
+        # It must fail BECAUSE of cdk-nag findings, not a compile/synth error.
         run: |
-          if npx cdk synth InsecureStack -c includeInsecure=true --quiet; then
+          if npx cdk synth InsecureStack -c includeInsecure=true --quiet > insecure-synth.log 2>&1; then
+            cat insecure-synth.log
             echo "::error::InsecureStack passed cdk-nag, but it should fail."
             exit 1
           fi
+          if ! grep -q "AwsSolutions-" insecure-synth.log; then
+            cat insecure-synth.log
+            echo "::error::InsecureStack synth failed, but not because of cdk-nag findings."
+            exit 1
+          fi
+          echo "InsecureStack failed cdk-nag as expected: $(grep -c '^ERROR' insecure-synth.log) errors."
