@@ -1,0 +1,6 @@
+date,region,service,findings_before,findings_after
+2026-01-05,us-east-1,s3,3,0
+2026-01-05,us-east-1,iam,3,0
+2026-01-05,us-east-1,lambda,1,0
+2026-01-05,us-east-1,vpc,1,0
+2026-01-05,us-east-1,rds,5,0

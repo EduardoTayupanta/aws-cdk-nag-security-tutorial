@@ -1,0 +1,56 @@
+{
+  "name": "aws-cdk-nag-security-tutorial",
+  "version": "1.0.0",
+  "description": "Step-by-step tutorial on static security analysis for AWS CDK with cdk-nag: an insecure stack, its remediated version, and tests that prove every remediation.",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc && npm --prefix lambda/reader run typecheck",
+    "watch": "tsc -w",
+    "test": "jest",
+    "synth": "cdk synth --quiet",
+    "synth:insecure": "cdk synth InsecureStack -c includeInsecure=true",
+    "cdk": "cdk",
+    "test:lambda": "npm test --prefix lambda/reader"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EduardoTayupanta/aws-cdk-nag-security-tutorial.git"
+  },
+  "keywords": [
+    "aws",
+    "aws-cdk",
+    "cdk",
+    "cdk-nag",
+    "security",
+    "static-analysis",
+    "infrastructure-as-code",
+    "typescript",
+    "devsecops",
+    "aws-community-builders"
+  ],
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bugs": {
+    "url": "https://github.com/EduardoTayupanta/aws-cdk-nag-security-tutorial/issues"
+  },
+  "homepage": "https://github.com/EduardoTayupanta/aws-cdk-nag-security-tutorial#readme",
+  "dependencies": {
+    "aws-cdk-lib": "^2.272.0",
+    "cdk-nag": "^3.0.2",
+    "constructs": "^10.8.1",
+    "source-map-support": "^0.5.21"
+  },
+  "devDependencies": {
+    "@swc/core": "^1.16.13",
+    "@swc/jest": "^0.2.39",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^26.6.4",
+    "aws-cdk": "^2.1144.0",
+    "jest": "^30.5.2",
+    "tsx": "^4.23.15",
+    "typescript": "~7.0.2"
+  }
+}
