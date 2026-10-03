@@ -1,0 +1,98 @@
+name: cdk-nag-check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege: the job only needs to read the repository.
+permissions:
+  contents: read
+
+# Cancel earlier runs for the same branch / PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security-scan:
+    name: Typecheck, tests and cdk-nag
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Actions pinned by commit SHA (not by a mutable tag); Dependabot keeps them updated.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            lambda/reader/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm ci --prefix lambda/reader
+
+      # tsc for the CDK app + `tsc --noEmit` for lambda/reader
+      - name: Typecheck
+        run: npm run build
+
+      # Includes cdk-nag validateScope() on both stacks, plus a 100% coverage
+      # threshold (jest.config.js).
+      - name: Tests (includes cdk-nag)
+        run: npm test -- --coverage
+
+      # The Lambda's own toolchain, with its own 100% coverage threshold.
+      - name: Tests (lambda/reader)
+        run: npm run test:lambda
+
+      # The merge-blocking step: if cdk-nag reports an error in SecureStack,
+      # `cdk synth` exits non-zero.
+      # Requires neither AWS credentials nor Docker.
+      - name: cdk synth (SecureStack)
+        run: npx cdk synth --quiet
+
+      # Proves the "before" stack STILL fails: if it ever passed, the tutorial
+      # would be showing flaws that cdk-nag no longer detects.
+      - name: cdk synth (InsecureStack must fail)
+        # It must fail BECAUSE of cdk-nag findings, not a compile/synth error.
+        run: |
+          if npx cdk synth InsecureStack -c includeInsecure=true --quiet > insecure-synth.log 2>&1; then
+            cat insecure-synth.log
+            echo "::error::InsecureStack passed cdk-nag, but it should fail."
+            exit 1
+          fi
+          if ! grep -q "AwsSolutions-" insecure-synth.log; then
+            cat insecure-synth.log
+            echo "::error::InsecureStack synth failed, but not because of cdk-nag findings."
+            exit 1
+          fi
+          echo "InsecureStack failed cdk-nag as expected: $(grep -c '^ERROR' insecure-synth.log) errors."
+
+  reader-image:
+    name: Build ReaderFunction image (arm64)
+    # Native arm64 runner: builds the image for the same architecture the
+    # function runs on, without QEMU emulation. Nothing is pushed anywhere.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: docker build lambda/reader
+        run: docker build --platform linux/arm64 -t reader-function:ci lambda/reader
+
+      # Smoke test: the bundled handler loads inside the real Lambda base image.
+      - name: Handler loads in the image
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -e BUCKET_NAME=ci-bucket -e READ_PREFIX=uploads/ \
+            --entrypoint node reader-function:ci \
+            -e "const { handler } = require('/var/task/index.js'); if (typeof handler !== 'function') process.exit(1); console.log('handler OK');"
