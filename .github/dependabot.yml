@@ -15,6 +15,25 @@ updates:
         dependency-type: development
         exclude-patterns: ['aws-cdk']
 
+  # lambda/reader is a self-contained sub-project with its own lockfile.
+  - package-ecosystem: npm
+    directory: /lambda/reader
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      aws-sdk:
+        patterns: ['@aws-sdk/*']
+      dev-dependencies:
+        dependency-type: development
+
+  # Base images in lambda/reader/Dockerfile (node:22-slim, lambda/nodejs:22).
+  - package-ecosystem: docker
+    directory: /lambda/reader
+    schedule:
+      interval: weekly
+
   - package-ecosystem: github-actions
     directory: /
     schedule:

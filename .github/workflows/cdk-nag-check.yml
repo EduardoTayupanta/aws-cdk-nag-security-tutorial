@@ -30,10 +30,16 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            lambda/reader/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci
+          npm ci --prefix lambda/reader
 
+      # tsc for the CDK app + `tsc --noEmit` for lambda/reader
       - name: Typecheck
         run: npm run build
 
@@ -41,6 +47,10 @@ jobs:
       # threshold (jest.config.js).
       - name: Tests (includes cdk-nag)
         run: npm test -- --coverage
+
+      # The Lambda's own toolchain, with its own 100% coverage threshold.
+      - name: Tests (lambda/reader)
+        run: npm run test:lambda
 
       # The merge-blocking step: if cdk-nag reports an error in SecureStack,
       # `cdk synth` exits non-zero.
@@ -64,3 +74,25 @@ jobs:
             exit 1
           fi
           echo "InsecureStack failed cdk-nag as expected: $(grep -c '^ERROR' insecure-synth.log) errors."
+
+  reader-image:
+    name: Build ReaderFunction image (arm64)
+    # Native arm64 runner: builds the image for the same architecture the
+    # function runs on, without QEMU emulation. Nothing is pushed anywhere.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: docker build lambda/reader
+        run: docker build --platform linux/arm64 -t reader-function:ci lambda/reader
+
+      # Smoke test: the bundled handler loads inside the real Lambda base image.
+      - name: Handler loads in the image
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -e BUCKET_NAME=ci-bucket -e READ_PREFIX=uploads/ \
+            --entrypoint node reader-function:ci \
+            -e "const { handler } = require('/var/task/index.js'); if (typeof handler !== 'function') process.exit(1); console.log('handler OK');"
