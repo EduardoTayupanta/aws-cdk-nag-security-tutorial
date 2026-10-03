@@ -11,6 +11,6 @@ RUN npm run bundle
 
 # ---- Runtime stage: AWS's Lambda Node.js base image ----
 # Only the bundled JS crosses into the final image.
-FROM public.ecr.aws/lambda/nodejs:22
+FROM public.ecr.aws/lambda/nodejs:24
 COPY --from=build /build/dist/index.js ${LAMBDA_TASK_ROOT}/index.js
 CMD ["index.handler"]
