@@ -3,24 +3,24 @@ import { AwsSolutionsChecks } from 'cdk-nag';
 import * as cdkJson from '../cdk.json';
 
 /**
- * Los feature flags de cdk.json solo los aplica el CLI de `cdk`, nunca un
- * `new App()` a secas. Se cargan explícitamente para que los tests se
- * comporten igual que `cdk synth` (p. ej. el flag de S3 que hace que los
- * access logs usen bucket policy en lugar de ACLs).
+ * The feature flags in cdk.json are only applied by the `cdk` CLI, never by a
+ * bare `new App()`. They are loaded explicitly so the tests behave the same as
+ * `cdk synth` (e.g. the S3 flag that makes access logs use a bucket policy
+ * instead of ACLs).
  */
 export function newTestApp(): App {
   return new App({ context: cdkJson.context });
 }
 
 /**
- * Ejecuta el paquete AwsSolutions sobre el stack con `validateScope()`, el
- * punto de entrada de cdk-nag 3.x para tests (no necesita un `cdk synth`).
+ * Runs the AwsSolutions pack against the stack with `validateScope()`, the
+ * cdk-nag 3.x entry point for tests (no `cdk synth` needed).
  */
 export function runAwsSolutions(stack: Stack) {
   return new AwsSolutionsChecks().validateScope(stack);
 }
 
-/** IDs de regla (p. ej. `AwsSolutions-IAM5[Action::s3:*]`) reportados para el stack. */
+/** Rule IDs (e.g. `AwsSolutions-IAM5[Action::s3:*]`) reported for the stack. */
 export function reportedRuleIds(stack: Stack): string[] {
   return runAwsSolutions(stack).violations.map((v) => v.ruleName);
 }
@@ -32,11 +32,11 @@ export interface RecordedAcknowledgment {
 }
 
 /**
- * Todas las supresiones de cdk-nag (`Validations.of(x).acknowledge(...)`)
- * registradas en el árbol del stack. CDK las guarda como metadata del
- * construct (`{ "Annotation::<id>": "<reason>" }`) justamente para poder
- * construir un rastro de auditoría. Se filtran las que CDK agrega por su
- * cuenta (p. ej. `CloudFormation-Validate::W3010`).
+ * Every cdk-nag suppression (`Validations.of(x).acknowledge(...)`) recorded in
+ * the stack's tree. CDK stores them as construct metadata
+ * (`{ "Annotation::<id>": "<reason>" }`) precisely so an audit trail can be
+ * built. Entries that CDK adds on its own (e.g. `CloudFormation-Validate::W3010`)
+ * are filtered out.
  */
 export function nagAcknowledgmentsIn(stack: Stack): RecordedAcknowledgment[] {
   return stack.node.findAll().flatMap((c) =>

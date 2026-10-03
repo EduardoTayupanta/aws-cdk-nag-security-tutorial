@@ -7,24 +7,24 @@ import { InstanceClass, InstanceSize, InstanceType, SubnetType, Vpc } from 'aws-
 import { DatabaseInstance, DatabaseInstanceEngine, PostgresEngineVersion } from 'aws-cdk-lib/aws-rds';
 
 /**
- * El "ANTES" del tutorial: un stack con las fallas de seguridad más comunes
- * escritas A PROPÓSITO, para ver cómo las reporta cdk-nag.
+ * The tutorial's "BEFORE": a stack with the most common security flaws written
+ * ON PURPOSE, to show how cdk-nag reports them.
  *
- * ⚠️ No está pensado para desplegarse. `bin/app.ts` solo lo agrega al App
- * cuando se pasa `-c includeInsecure=true`, así `cdk synth` por defecto (y el
- * pipeline de CI) se mantiene en verde.
+ * ⚠️ Not meant to be deployed. `bin/app.ts` only adds it to the App when
+ * `-c includeInsecure=true` is passed, so the default `cdk synth` (and the CI
+ * pipeline) stays green.
  *
- * Cada bloque está marcado con las reglas que dispara; `test/insecure-stack.test.ts`
- * verifica que cdk-nag realmente las reporte, y `lib/secure-stack.ts` muestra
- * la remediación de cada una con el mismo ID de construct.
+ * Each block is tagged with the rules it triggers; `test/insecure-stack.test.ts`
+ * verifies that cdk-nag actually reports them, and `lib/secure-stack.ts` shows
+ * the remediation for each one under the same construct ID.
  */
 export class InsecureStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
 
-    // AwsSolutions-S1  → sin server access logging
-    // AwsSolutions-S2  → acceso público no bloqueado
-    // AwsSolutions-S10 → no exige TLS (aws:SecureTransport)
+    // AwsSolutions-S1  → no server access logging
+    // AwsSolutions-S2  → public access not blocked
+    // AwsSolutions-S10 → TLS not enforced (aws:SecureTransport)
     const dataBucket = new Bucket(this, 'DataBucket', {
       blockPublicAccess: new BlockPublicAccess({
         blockPublicAcls: false,
@@ -35,15 +35,15 @@ export class InsecureStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    // AwsSolutions-IAM4 → política administrada de AWS demasiado amplia
-    // AwsSolutions-IAM5 → wildcards en Action (s3:*) y Resource (*)
+    // AwsSolutions-IAM4 → overly broad AWS managed policy
+    // AwsSolutions-IAM5 → wildcards in Action (s3:*) and Resource (*)
     const appRole = new Role(this, 'AppRole', {
       assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
     });
     appRole.addManagedPolicy(ManagedPolicy.fromAwsManagedPolicyName('AmazonS3FullAccess'));
     appRole.addToPolicy(new PolicyStatement({ actions: ['s3:*'], resources: ['*'] }));
 
-    // AwsSolutions-L1 → runtime que no es el más reciente de su familia
+    // AwsSolutions-L1 → runtime is not the latest in its family
     new Function(this, 'ReaderFunction', {
       runtime: Runtime.NODEJS_20_X,
       handler: 'index.handler',
@@ -52,16 +52,16 @@ export class InsecureStack extends Stack {
       environment: { BUCKET_NAME: dataBucket.bucketName },
     });
 
-    // AwsSolutions-VPC7 → VPC sin Flow Logs
+    // AwsSolutions-VPC7 → VPC without Flow Logs
     const vpc = new Vpc(this, 'AppVpc', {
       maxAzs: 2,
       natGateways: 0,
       subnetConfiguration: [{ name: 'isolated', subnetType: SubnetType.PRIVATE_ISOLATED }],
     });
 
-    // AwsSolutions-RDS2  → almacenamiento sin cifrar
-    // AwsSolutions-RDS10 → sin deletion protection
-    // (además dispara RDS3, RDS11, RDS13, SMG4… ver el README)
+    // AwsSolutions-RDS2  → unencrypted storage
+    // AwsSolutions-RDS10 → no deletion protection
+    // (also triggers RDS3, RDS11, RDS13, SMG4… see the README)
     new DatabaseInstance(this, 'AppDatabase', {
       engine: DatabaseInstanceEngine.postgres({ version: PostgresEngineVersion.VER_17 }),
       instanceType: InstanceType.of(InstanceClass.T4G, InstanceSize.MICRO),

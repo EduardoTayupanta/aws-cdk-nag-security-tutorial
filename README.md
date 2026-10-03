@@ -1,106 +1,106 @@
-# AWS CDK Nag — Tutorial paso a paso
+# AWS CDK Nag — Step-by-Step Security Tutorial
 
 [![cdk-nag-check](https://github.com/EduardoTayupanta/aws-cdk-nag-security-tutorial/actions/workflows/cdk-nag-check.yml/badge.svg)](https://github.com/EduardoTayupanta/aws-cdk-nag-security-tutorial/actions/workflows/cdk-nag-check.yml)
 ![cdk-nag 3.x](https://img.shields.io/badge/cdk--nag-3.x-blue)
 ![AWS CDK v2](https://img.shields.io/badge/AWS%20CDK-v2-orange)
 ![Coverage 100%](https://img.shields.io/badge/coverage-100%25-brightgreen)
 
-Análisis estático de seguridad en AWS CDK usando [`cdk-nag`](https://github.com/cdklabs/cdk-nag): cómo instalarlo, configurarlo, leer los hallazgos que genera y remediar los más comunes.
+Static security analysis for AWS CDK with [`cdk-nag`](https://github.com/cdklabs/cdk-nag): how to install and configure it, how to read the findings it reports, and how to remediate the most common ones.
 
-Este repositorio no solo muestra fragmentos: contiene **dos stacks reales** con los mismos recursos —uno con las fallas escritas a propósito (`InsecureStack`) y otro remediado (`SecureStack`)— y **tests que prueban** que cdk-nag detecta cada falla en el primero y ninguna en el segundo. Todos los ejemplos del README están tomados de ese código y verificados contra **cdk-nag 3.x** y **aws-cdk-lib 2.27x**.
+This repository goes beyond snippets: it contains **two real stacks** with the same resources (one with deliberately introduced flaws, `InsecureStack`, and one remediated, `SecureStack`) plus **tests that prove** cdk-nag detects every flaw in the first and none in the second. Every example in this README is taken from that code and verified against **cdk-nag 3.x** and **aws-cdk-lib 2.27x**.
 
-Escrito como parte de una serie para el programa [AWS Community Builders](https://aws.amazon.com/developer/community/community-builders/).
+Written as part of a series for the [AWS Community Builders](https://aws.amazon.com/developer/community/community-builders/) program.
 
-## Tabla de contenidos
+## Table of Contents
 
-1. [¿Qué es cdk-nag?](#qué-es-cdk-nag)
-2. [Inicio rápido](#inicio-rápido)
-3. [Prerrequisitos](#prerrequisitos)
-4. [Instalación](#instalación)
-5. [Configuración básica](#configuración-básica)
-6. [Ejecutar el análisis](#ejecutar-el-análisis)
-7. [Cómo interpretar los hallazgos](#cómo-interpretar-los-hallazgos)
-8. [Hallazgos más comunes y su remediación](#hallazgos-más-comunes-y-su-remediación)
-9. [Suprimir hallazgos justificados](#suprimir-hallazgos-justificados)
-10. [Probar el cumplimiento con tests](#probar-el-cumplimiento-con-tests)
-11. [Integración en CI/CD](#integración-en-cicd)
-12. [Lecciones aprendidas](#lecciones-aprendidas)
-13. [Desplegar (opcional) y costos](#desplegar-opcional-y-costos)
-14. [Estructura del repositorio](#estructura-del-repositorio)
-15. [Recursos adicionales](#recursos-adicionales)
+1. [What Is cdk-nag?](#what-is-cdk-nag)
+2. [Quick Start](#quick-start)
+3. [Prerequisites](#prerequisites)
+4. [Installation](#installation)
+5. [Basic Configuration](#basic-configuration)
+6. [Running the Analysis](#running-the-analysis)
+7. [How to Read the Findings](#how-to-read-the-findings)
+8. [Common Findings and How to Remediate Them](#common-findings-and-how-to-remediate-them)
+9. [Suppressing Justified Findings](#suppressing-justified-findings)
+10. [Testing Compliance with Unit Tests](#testing-compliance-with-unit-tests)
+11. [CI/CD Integration](#cicd-integration)
+12. [Lessons Learned](#lessons-learned)
+13. [Deploying (Optional) and Costs](#deploying-optional-and-costs)
+14. [Repository Structure](#repository-structure)
+15. [Additional Resources](#additional-resources)
 
-## ¿Qué es cdk-nag?
+## What Is cdk-nag?
 
-`cdk-nag` es una librería que se ejecuta durante la síntesis de una app de AWS CDK (`cdk synth`) y valida los recursos generados contra conjuntos de reglas de seguridad y buenas prácticas (**NagPacks**), como:
+`cdk-nag` is a library that runs during AWS CDK synthesis (`cdk synth`) and validates the generated resources against rule packs for security and best practices (**NagPacks**), such as:
 
-- **AwsSolutionsChecks** — buenas prácticas generales de AWS Solutions Library (el que usa este tutorial).
-- **HIPAASecurityChecks** — controles orientados a HIPAA.
-- **NIST80053R5Checks** — controles NIST 800-53 Rev. 5.
-- **PCIDSS321Checks** — controles PCI DSS v3.2.1.
+- **AwsSolutionsChecks** — general best practices from the AWS Solutions Library (the pack used in this tutorial).
+- **HIPAASecurityChecks** — HIPAA-oriented controls.
+- **NIST80053R5Checks** — NIST 800-53 Rev. 5 controls.
+- **PCIDSS321Checks** — PCI DSS v3.2.1 controls.
 
-Desde la versión 3.x, cdk-nag se integra como **plugin de validación nativo de CDK** (`Validations`): revisa el template de CloudFormation que se va a generar y reporta hallazgos en la consola —o rompe el build— sin necesidad de desplegar nada.
+Starting with version 3.x, cdk-nag integrates as a **native CDK validation plugin** (`Validations`): it inspects the CloudFormation template about to be generated and reports findings in the console (or fails the build) without deploying anything.
 
-> **¿Vienes de cdk-nag 2.x?** La API cambió: `Aspects.of(app).add(new AwsSolutionsChecks())` pasa a ser `Validations.of(app).addPlugins(new AwsSolutionsChecks(app))`, y `NagSuppressions.addResourceSuppressions(...)` pasa a ser `Validations.of(construct).acknowledge(...)`. Todo este tutorial usa la API 3.x.
+> **Coming from cdk-nag 2.x?** The API has changed: `Aspects.of(app).add(new AwsSolutionsChecks())` becomes `Validations.of(app).addPlugins(new AwsSolutionsChecks(app))`, and `NagSuppressions.addResourceSuppressions(...)` becomes `Validations.of(construct).acknowledge(...)`. This entire tutorial uses the 3.x API.
 
-## Inicio rápido
+## Quick Start
 
 ```bash
 git clone https://github.com/EduardoTayupanta/aws-cdk-nag-security-tutorial.git
 cd aws-cdk-nag-security-tutorial
 npm ci
 
-npm test                # tests de CDK + cdk-nag sobre ambos stacks (cobertura 100%)
-npm run synth           # sintetiza SecureStack: pasa cdk-nag ✅
-npm run synth:insecure  # sintetiza InsecureStack: cdk-nag reporta 13 errores ❌
+npm test                # CDK + cdk-nag tests for both stacks (100% coverage)
+npm run synth           # synthesizes SecureStack: passes cdk-nag ✅
+npm run synth:insecure  # synthesizes InsecureStack: cdk-nag reports 13 errors ❌
 ```
 
-Ninguno de estos comandos necesita credenciales de AWS.
+None of these commands require AWS credentials.
 
 ```mermaid
 flowchart LR
-    subgraph antes["InsecureStack (antes)"]
+    subgraph before["InsecureStack (before)"]
         direction TB
-        a1["DataBucket<br/>sin logs · público · sin TLS"]
-        a2["AppRole<br/>AmazonS3FullAccess + s3:* sobre *"]
+        a1["DataBucket<br/>no logs · public · no TLS"]
+        a2["AppRole<br/>AmazonS3FullAccess + s3:* on *"]
         a3["ReaderFunction<br/>nodejs20.x"]
-        a4["AppVpc<br/>sin Flow Logs"]
-        a5["AppDatabase<br/>sin cifrar · sin protección · sin rotación"]
+        a4["AppVpc<br/>no Flow Logs"]
+        a5["AppDatabase<br/>unencrypted · no protection · no rotation"]
     end
-    subgraph despues["SecureStack (después)"]
+    subgraph after["SecureStack (after)"]
         direction TB
         b1["DataBucket<br/>access logs · BLOCK_ALL · enforceSSL"]
-        b2["AppRole<br/>s3:GetObject solo en uploads/*"]
-        b3["ReaderFunction<br/>nodejs24.x · log group propio"]
-        b4["AppVpc<br/>Flow Logs · subnets aisladas · sin NAT"]
-        b5["AppDatabase<br/>cifrada · Multi-AZ · rotación vía VPC endpoint"]
+        b2["AppRole<br/>s3:GetObject on uploads/* only"]
+        b3["ReaderFunction<br/>nodejs24.x · dedicated log group"]
+        b4["AppVpc<br/>Flow Logs · isolated subnets · no NAT"]
+        b5["AppDatabase<br/>encrypted · Multi-AZ · rotation via VPC endpoint"]
     end
-    antes -- "cdk-nag: 13 errores → 0" --> despues
+    before -- "cdk-nag: 13 errors → 0" --> after
 ```
 
-## Prerrequisitos
+## Prerequisites
 
-- Node.js 22.13+ y npm.
-- AWS CDK v2 (`npx cdk` usa la versión local del proyecto; no hace falta instalarlo global).
-- Un proyecto CDK en TypeScript (los mismos conceptos aplican a Python/Java/.NET/Go).
-- Conocimientos básicos de `App`, `Stack` y `Construct` en CDK.
+- Node.js 22.13+ and npm.
+- AWS CDK v2 (`npx cdk` uses the project's local version; no global install required).
+- A TypeScript CDK project (the same concepts apply to Python/Java/.NET/Go).
+- Basic familiarity with `App`, `Stack`, and `Construct` in CDK.
 
-## Instalación
+## Installation
 
-Dentro de la carpeta del proyecto CDK:
+From the root of your CDK project:
 
 ```bash
 npm install cdk-nag
 ```
 
-Verificar la versión instalada (este tutorial requiere la 3.x):
+Check the installed version (this tutorial requires 3.x):
 
 ```bash
 npm list cdk-nag
 ```
 
-## Configuración básica
+## Basic Configuration
 
-En el punto de entrada de la app ([bin/app.ts](bin/app.ts)) se registra el rule pack **una sola vez, a nivel de `App`**, así cualquier stack que se agregue después queda cubierto sin cableado extra:
+In the app entry point ([bin/app.ts](bin/app.ts)), the rule pack is registered **once, at the `App` level**, so any stack added later is covered without extra wiring:
 
 ```typescript
 #!/usr/bin/env node
@@ -116,25 +116,25 @@ new SecureStack(app, 'SecureStack');
 Validations.of(app).addPlugins(new AwsSolutionsChecks(app, { verbose: true }));
 ```
 
-La opción `verbose: true` agrega la explicación completa de cada regla al reporte, lo que facilita muchísimo la remediación.
+The `verbose: true` option adds each rule's full explanation to the report, which makes remediation much easier.
 
-En este repo, `InsecureStack` solo se agrega a la app cuando se pasa `-c includeInsecure=true`, para que `cdk synth` por defecto (y el pipeline) se mantenga en verde.
+In this repo, `InsecureStack` is only added to the app when you pass `-c includeInsecure=true`, so that a default `cdk synth` (and the pipeline) stays green.
 
-## Ejecutar el análisis
+## Running the Analysis
 
-cdk-nag se ejecuta automáticamente cada vez que se sintetiza la app:
+cdk-nag runs automatically every time the app is synthesized:
 
 ```bash
 npx cdk synth
 ```
 
-Para ver los hallazgos del stack inseguro:
+To see the findings for the insecure stack:
 
 ```bash
 npx cdk synth InsecureStack -c includeInsecure=true
 ```
 
-Extracto de la salida real:
+Excerpt of the actual output:
 
 ```
 ERROR The S3 Bucket has server access logs disabled. The bucket should have server access logging enabled to provide detailed records for the requests that are made to the bucket. (AwsSolutions)
@@ -151,33 +151,33 @@ WARNING Runtime: Runtime 'nodejs20.x' was deprecated on '2026-04-30'. [...] (Clo
 Synthesis finished with errors
 ```
 
-Un hallazgo de nivel `ERROR` hace que `cdk synth` (y por lo tanto `cdk deploy`) termine con código de salida distinto de cero. Además de la salida en consola, el reporte completo queda en `cdk.out/validation-report.json`.
+An `ERROR`-level finding makes `cdk synth` (and therefore `cdk deploy`) exit with a non-zero code. In addition to the console output, the full report is written to `cdk.out/validation-report.json`.
 
-## Cómo interpretar los hallazgos
+## How to Read the Findings
 
-Cada hallazgo tiene esta forma:
+Each finding has this shape:
 
 ```
-<NIVEL> <Descripción de la regla> (<Rule pack>)
-   <Ruta del construct> <Tipo L1>
-   Acknowledge with '<ID del hallazgo>'
+<LEVEL> <Rule description> (<Rule pack>)
+   <Construct path> <L1 type>
+   Acknowledge with '<Finding ID>'
 ```
 
-- **Nivel**: `ERROR` (bloquea synth/deploy) o `WARNING` (informativo).
-- **Ruta del construct**: ubicación exacta del recurso en el árbol (`InsecureStack/DataBucket/Resource`); coincide con los IDs de tu código.
-- **ID del hallazgo**: la regla (`AwsSolutions-S1`) o, en reglas *granulares* como IAM4/IAM5, la regla más el hallazgo concreto (`AwsSolutions-IAM5[Action::s3:*]`). Se busca en [RULES.md](https://github.com/cdklabs/cdk-nag/blob/main/RULES.md) para ver la explicación completa.
-- **Rule pack**: además de `AwsSolutions`, CDK corre su propio validador (`CloudFormation Validate`), que también aporta avisos útiles, como runtimes deprecados.
+- **Level**: `ERROR` (blocks synth/deploy) or `WARNING` (informational).
+- **Construct path**: the exact location of the resource in the construct tree (`InsecureStack/DataBucket/Resource`); it matches the IDs in your code.
+- **Finding ID**: the rule (`AwsSolutions-S1`) or, for *granular* rules such as IAM4/IAM5, the rule plus the specific finding (`AwsSolutions-IAM5[Action::s3:*]`). Look it up in [RULES.md](https://github.com/cdklabs/cdk-nag/blob/main/RULES.md) for the full explanation.
+- **Rule pack**: besides `AwsSolutions`, CDK runs its own validator (`CloudFormation Validate`), which also surfaces useful warnings such as deprecated runtimes.
 
-Recomendación práctica: resolver primero los de mayor impacto (acceso público, cifrado, IAM permisivo) y después los de *hardening* (logging, versiones de runtime, puertos).
+Practical advice: fix the highest-impact findings first (public access, encryption, overly permissive IAM), then move on to *hardening* (logging, runtime versions, ports).
 
-## Hallazgos más comunes y su remediación
+## Common Findings and How to Remediate Them
 
-Todos los fragmentos son de [lib/insecure-stack.ts](lib/insecure-stack.ts) (antes) y [lib/secure-stack.ts](lib/secure-stack.ts) (después). Ambos usan **los mismos IDs de construct**, así es fácil compararlos.
+All snippets come from [lib/insecure-stack.ts](lib/insecure-stack.ts) (before) and [lib/secure-stack.ts](lib/secure-stack.ts) (after). Both use **the same construct IDs**, which makes them easy to compare.
 
-### AwsSolutions-S1 / S2 / S10 — Bucket S3 sin access logs, público o sin TLS
+### AwsSolutions-S1 / S2 / S10 — S3 bucket without access logs, public, or without TLS
 
 ```typescript
-// Antes: S1 (sin logs), S2 (acceso público no bloqueado), S10 (no exige TLS)
+// Before: S1 (no logs), S2 (public access not blocked), S10 (TLS not enforced)
 new Bucket(this, 'DataBucket', {
   blockPublicAccess: new BlockPublicAccess({
     blockPublicAcls: false, blockPublicPolicy: false,
@@ -185,7 +185,7 @@ new Bucket(this, 'DataBucket', {
   }),
 });
 
-// Después
+// After
 const accessLogsBucket = new Bucket(this, 'AccessLogsBucket', {
   encryption: BucketEncryption.S3_MANAGED,
   blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
@@ -205,19 +205,19 @@ new Bucket(this, 'DataBucket', {
 });
 ```
 
-¿Y el bucket de logs no necesita a su vez logging? No: la regla S1 reconoce a un bucket que ya es **destino** de access logs como compliant, sin supresión.
+Doesn't the logs bucket need logging of its own? No: rule S1 treats a bucket that is already an access-log **destination** as compliant, with no suppression needed.
 
-### AwsSolutions-IAM4 — Uso de políticas administradas de AWS
+### AwsSolutions-IAM4 — Use of AWS managed policies
 
 ```typescript
-// Antes
+// Before
 appRole.addManagedPolicy(ManagedPolicy.fromAwsManagedPolicyName('AmazonS3FullAccess'));
 ```
 
-Un caso menos obvio: **toda Lambda con el rol por defecto** recibe la política administrada `AWSLambdaBasicExecutionRole` y dispara IAM4. Se puede suprimir (solo concede permisos de CloudWatch Logs), pero es mejor darle un rol propio y acotar los logs a **un** log group:
+A less obvious case: **every Lambda function using the default role** gets the `AWSLambdaBasicExecutionRole` managed policy and triggers IAM4. You could suppress it (it only grants CloudWatch Logs permissions), but it is better to give the function its own role and scope log permissions to **a single** log group:
 
 ```typescript
-// Después
+// After
 const appRole = new Role(this, 'AppRole', {
   assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
 });
@@ -227,13 +227,13 @@ readerLogGroup.grantWrite(appRole);
 new Function(this, 'ReaderFunction', { /* ... */ role: appRole, logGroup: readerLogGroup });
 ```
 
-### AwsSolutions-IAM5 — Permisos con wildcard (`*`) en Action o Resource
+### AwsSolutions-IAM5 — Wildcard (`*`) permissions in Action or Resource
 
 ```typescript
-// Antes: dos hallazgos, IAM5[Action::s3:*] e IAM5[Resource::*]
+// Before: two findings, IAM5[Action::s3:*] and IAM5[Resource::*]
 appRole.addToPolicy(new PolicyStatement({ actions: ['s3:*'], resources: ['*'] }));
 
-// Después: una acción, un prefijo
+// After: one action, one prefix
 appRole.addToPolicy(new PolicyStatement({
   sid: 'ReadUploadsPrefixOnly',
   actions: ['s3:GetObject'],
@@ -241,23 +241,23 @@ appRole.addToPolicy(new PolicyStatement({
 }));
 ```
 
-> ⚠️ **Ojo:** esto **todavía dispara IAM5** — `IAM5[Resource::<DataBucketE3889A50.Arn>/uploads/*]` — porque el ARN termina en `*`. Es esperable: un prefijo de S3 es el alcance más estrecho posible para objetos que se crean en tiempo de ejecución. El paso correcto aquí es **reconocer ese hallazgo concreto con una justificación** (ver [Suprimir hallazgos justificados](#suprimir-hallazgos-justificados)), no ampliar el permiso.
+> ⚠️ **Heads up:** this **still triggers IAM5** (`IAM5[Resource::<DataBucketE3889A50.Arn>/uploads/*]`) because the ARN ends in `*`. That is expected: an S3 prefix is the narrowest possible scope for objects created at runtime. The right move here is to **acknowledge that specific finding with a justification** (see [Suppressing Justified Findings](#suppressing-justified-findings)), not to broaden the permission.
 >
-> ¿Por qué no `bucket.grantRead(role, 'uploads/*')`? Funciona, pero además concede `s3:GetObject*`, `s3:GetBucket*` y `s3:List*`: tres hallazgos IAM5 más que justificar para una función que solo lee objetos.
+> Why not `bucket.grantRead(role, 'uploads/*')`? It works, but it also grants `s3:GetObject*`, `s3:GetBucket*`, and `s3:List*`: three more IAM5 findings to justify for a function that only reads objects.
 
-### AwsSolutions-L1 — Lambda sin el runtime más reciente
+### AwsSolutions-L1 — Lambda not using the latest runtime
 
 ```typescript
-// Antes
+// Before
 runtime: Runtime.NODEJS_20_X,
 
-// Después
+// After
 runtime: Runtime.NODEJS_24_X,
 ```
 
-Se fija la versión explícitamente en lugar de usar `Runtime.NODEJS_LATEST`, cuyo valor puede cambiar al actualizar `aws-cdk-lib` y modificar el template sin aviso.
+The version is pinned explicitly instead of using `Runtime.NODEJS_LATEST`, whose value can change when you upgrade `aws-cdk-lib` and silently modify the template.
 
-### AwsSolutions-VPC7 — VPC sin Flow Logs
+### AwsSolutions-VPC7 — VPC without Flow Logs
 
 ```typescript
 const vpc = new Vpc(this, 'AppVpc', {
@@ -274,19 +274,19 @@ const vpc = new Vpc(this, 'AppVpc', {
 });
 ```
 
-Las subnets son aisladas y no hay NAT Gateway: la base de datos no necesita salir a internet. Menos costo y menos superficie de ataque.
+The subnets are isolated and there is no NAT Gateway: the database has no need to reach the internet. Lower cost and a smaller attack surface.
 
-### AwsSolutions-RDS2 / RDS3 / RDS10 / RDS11 / SMG4 — Base de datos RDS
+### AwsSolutions-RDS2 / RDS3 / RDS10 / RDS11 / SMG4 — RDS database
 
-Una sola instancia RDS con valores por defecto dispara **cinco** reglas:
+A single RDS instance with default settings triggers **five** rules:
 
-| Regla | Problema | Remediación |
-|-------|----------|-------------|
-| RDS2  | Almacenamiento sin cifrar | `storageEncrypted: true` |
-| RDS3  | Sin Multi-AZ | `multiAz: true` |
-| RDS10 | Sin deletion protection | `deletionProtection: true` |
-| RDS11 | Puerto por defecto (5432) | `port: 5433` |
-| SMG4  | El secreto de la contraseña no rota | `addRotationSingleUser()` |
+| Rule | Problem | Remediation |
+|------|---------|-------------|
+| RDS2  | Storage not encrypted | `storageEncrypted: true` |
+| RDS3  | No Multi-AZ | `multiAz: true` |
+| RDS10 | No deletion protection | `deletionProtection: true` |
+| RDS11 | Default port (5432) | `port: 5433` |
+| SMG4  | Password secret is not rotated | `addRotationSingleUser()` |
 
 ```typescript
 const database = new DatabaseInstance(this, 'AppDatabase', {
@@ -304,11 +304,11 @@ const database = new DatabaseInstance(this, 'AppDatabase', {
 });
 ```
 
-La rotación (SMG4) es la parte con trampa. La Lambda de rotación corre **dentro** de la VPC, que no tiene salida a internet, así que necesita un VPC endpoint de Secrets Manager:
+Rotation (SMG4) is the tricky part. The rotation Lambda runs **inside** the VPC, which has no internet egress, so it needs a Secrets Manager VPC endpoint:
 
 ```typescript
-// `open: false`: sin la regla por defecto que abre el endpoint a todo el CIDR
-// de la VPC (esa regla además hace que AwsSolutions-EC23 no pueda evaluarse).
+// `open: false`: skips the default rule that opens the endpoint to the entire
+// VPC CIDR (that rule also prevents AwsSolutions-EC23 from being evaluated).
 const secretsManagerEndpoint = vpc.addInterfaceEndpoint('SecretsManagerEndpoint', {
   service: InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
   subnets: { subnetType: SubnetType.PRIVATE_ISOLATED },
@@ -316,7 +316,7 @@ const secretsManagerEndpoint = vpc.addInterfaceEndpoint('SecretsManagerEndpoint'
 });
 
 const rotationSecurityGroup = new SecurityGroup(this, 'RotationSecurityGroup', { vpc });
-secretsManagerEndpoint.connections.allowDefaultPortFrom(rotationSecurityGroup); // 443, solo desde la rotación
+secretsManagerEndpoint.connections.allowDefaultPortFrom(rotationSecurityGroup); // 443, from the rotation function only
 
 database.addRotationSingleUser({
   endpoint: secretsManagerEndpoint,
@@ -324,11 +324,11 @@ database.addRotationSingleUser({
 });
 ```
 
-> La opción `endpoint` de `addRotationSingleUser` **solo cambia la URL** que usa la Lambda; **no** abre el security group del endpoint. Sin la línea `allowDefaultPortFrom`, el stack pasa cdk-nag y sintetiza bien, pero la rotación falla al ejecutarse. Ver [Lecciones aprendidas](#lecciones-aprendidas).
+> The `endpoint` option of `addRotationSingleUser` **only changes the URL** the Lambda uses; it does **not** open the endpoint's security group. Without the `allowDefaultPortFrom` line, the stack passes cdk-nag and synthesizes cleanly, but rotation fails at runtime. See [Lessons Learned](#lessons-learned).
 
-## Suprimir hallazgos justificados
+## Suppressing Justified Findings
 
-No todos los hallazgos aplican en todos los contextos. Para esos casos se usa `Validations.of(...).acknowledge()` **sobre el construct concreto** y con una justificación explícita, en vez de desactivar la regla:
+Not every finding applies in every context. For those cases, use `Validations.of(...).acknowledge()` **on the specific construct** with an explicit justification, instead of disabling the rule:
 
 ```typescript
 import { Validations } from 'aws-cdk-lib/core';
@@ -336,120 +336,120 @@ import { Validations } from 'aws-cdk-lib/core';
 Validations.of(appRole).acknowledge({
   id: 'AwsSolutions-IAM5[Resource::<DataBucketE3889A50.Arn>/uploads/*]',
   reason:
-    'El "*" es el alcance por prefijo deliberado: la función solo puede ejecutar s3:GetObject ' +
-    'sobre objetos bajo uploads/ de este bucket. S3 no permite enumerar las keys de antemano ' +
-    '(se crean en tiempo de ejecución), por lo que un prefijo es el alcance más estrecho posible.',
+    'The "*" is the deliberate prefix scope: the function can only call s3:GetObject ' +
+    'on objects under uploads/ in this bucket. S3 object keys are created at runtime and cannot be ' +
+    'enumerated in advance, so a prefix is the narrowest possible scope for object reads.',
 });
 ```
 
-En `SecureStack` esa es **la única** supresión. En el código, el ID lógico del bucket se calcula con `this.getLogicalId(...)` en lugar de escribirse a mano, para que no se rompa si cambia el hash.
+In `SecureStack`, this is **the only** suppression. In the code, the bucket's logical ID is computed with `this.getLogicalId(...)` instead of being hard-coded, so it does not break if the hash changes.
 
-Reglas que conviene conocer (todas respaldadas por [test/acknowledge.test.ts](test/acknowledge.test.ts)):
+Rules worth knowing (all backed by [test/acknowledge.test.ts](test/acknowledge.test.ts)):
 
-- **Usa el ID simple:** `AwsSolutions-S1`. El CLI sugiere `AwsSolutions::AwsSolutions-S1`; `cdk synth` acepta ambos, pero `validateScope()` (lo que usan los tests) **solo** acepta el simple.
-- **Las reglas granulares se reconocen hallazgo por hallazgo.** Reconocer `AwsSolutions-IAM5[Action::s3:*]` no oculta `AwsSolutions-IAM5[Resource::*]`, y reconocer el ID base `AwsSolutions-IAM5` no oculta ninguno de los dos. Es una ventaja: si mañana alguien agrega otro wildcard al mismo rol, cdk-nag lo vuelve a reportar.
-- **Escribe la razón para un revisor escéptico.** "Es necesario" o "no aplica" no son razones. Explica por qué el riesgo de la regla no aplica a ese recurso. La razón queda en el código y en la metadata del construct (`aws:cdk:acknowledged-rules`), y sirve como evidencia en auditorías.
+- **Use the plain ID:** `AwsSolutions-S1`. The CLI suggests `AwsSolutions::AwsSolutions-S1`; `cdk synth` accepts both, but `validateScope()` (what the tests use) accepts **only** the plain one.
+- **Granular rules are acknowledged finding by finding.** Acknowledging `AwsSolutions-IAM5[Action::s3:*]` does not hide `AwsSolutions-IAM5[Resource::*]`, and acknowledging the base ID `AwsSolutions-IAM5` hides neither. This is a feature: if someone later adds another wildcard to the same role, cdk-nag reports it again.
+- **Write the reason for a skeptical reviewer.** "It's required" or "not applicable" are not reasons. Explain why the risk the rule guards against does not apply to that resource. The reason lives in the code and in the construct metadata (`aws:cdk:acknowledged-rules`), and serves as evidence during audits.
 
-## Probar el cumplimiento con tests
+## Testing Compliance with Unit Tests
 
-cdk-nag 3.x expone `validateScope()`, que corre el rule pack sobre un stack en un test unitario, sin `cdk synth`:
+cdk-nag 3.x exposes `validateScope()`, which runs the rule pack against a stack inside a unit test, without `cdk synth`:
 
 ```typescript
-test('pasa el paquete AwsSolutions (cdk-nag) sin violaciones', () => {
+test('passes the AWS Solutions (cdk-nag) rule pack with no violations', () => {
   const report = new AwsSolutionsChecks().validateScope(stack);
   if (!report.success) {
-    // Fallar mostrando las violaciones reales, no solo "false !== true".
-    throw new Error(`Violaciones AwsSolutions:\n${JSON.stringify(report.violations, null, 2)}`);
+    // Fail with the actual violations printed, not just "false !== true".
+    throw new Error(`AwsSolutions violations:\n${JSON.stringify(report.violations, null, 2)}`);
   }
   expect(report.success).toBe(true);
 });
 ```
 
-Los tests de este repo cubren tres capas:
+The tests in this repo cover three layers:
 
-| Archivo | Qué prueba |
-|---------|-----------|
-| [test/insecure-stack.test.ts](test/insecure-stack.test.ts) | Que cdk-nag **sí** reporta cada una de las 13 reglas del tutorial. Si una versión futura de cdk-nag dejara de detectar alguna, el tutorial estaría enseñando algo falso. |
-| [test/secure-stack.test.ts](test/secure-stack.test.ts) | Que el stack pasa cdk-nag; que existe **exactamente una** supresión (la de IAM5); y, con `Template`/`Match`, cada remediación en el CloudFormation generado (incluida la regla del endpoint que cdk-nag no puede ver). |
-| [test/acknowledge.test.ts](test/acknowledge.test.ts) | El comportamiento de `acknowledge()` descrito en la sección anterior. |
+| File | What it tests |
+|------|---------------|
+| [test/insecure-stack.test.ts](test/insecure-stack.test.ts) | That cdk-nag **does** report each of the 13 rules covered in the tutorial. If a future cdk-nag version stopped detecting any of them, the tutorial would be teaching something false. |
+| [test/secure-stack.test.ts](test/secure-stack.test.ts) | That the stack passes cdk-nag; that there is **exactly one** suppression (the IAM5 one); and, using `Template`/`Match`, every remediation in the generated CloudFormation (including the endpoint ingress rule that cdk-nag cannot see). |
+| [test/acknowledge.test.ts](test/acknowledge.test.ts) | The `acknowledge()` behavior described in the previous section. |
 
-Los tests cargan el `context` de `cdk.json` de forma explícita (`new App({ context: cdkJson.context })`): los feature flags solo los aplica el CLI de `cdk`, no un `new App()` a secas. `jest.config.js` exige **100% de cobertura** sobre `lib/`.
+The tests load the `context` from `cdk.json` explicitly (`new App({ context: cdkJson.context })`): feature flags are only applied by the `cdk` CLI, not by a bare `new App()`. `jest.config.js` enforces **100% coverage** on `lib/`.
 
-## Integración en CI/CD
+## CI/CD Integration
 
-[.github/workflows/cdk-nag-check.yml](.github/workflows/cdk-nag-check.yml) corre en cada push y pull request a `main`:
+[.github/workflows/cdk-nag-check.yml](.github/workflows/cdk-nag-check.yml) runs on every push and pull request to `main`:
 
-1. `npm ci` y typecheck (`tsc`).
-2. `npm test -- --coverage`: tests y cdk-nag con umbral de cobertura del 100%.
-3. `cdk synth` de `SecureStack`: si cdk-nag reporta un `ERROR`, el job falla y el PR queda bloqueado.
-4. `cdk synth` de `InsecureStack`, que **debe fallar**: si pasara, el tutorial estaría mostrando fallas que cdk-nag ya no detecta.
+1. `npm ci` and typecheck (`tsc`).
+2. `npm test -- --coverage`: tests and cdk-nag with a 100% coverage threshold.
+3. `cdk synth` of `SecureStack`: if cdk-nag reports an `ERROR`, the job fails and the PR is blocked.
+4. `cdk synth` of `InsecureStack`, which **must fail**: if it passed, the tutorial would be showcasing flaws that cdk-nag no longer detects.
 
-Buenas prácticas aplicadas en el workflow:
+Best practices applied in the workflow:
 
-- `permissions: contents: read`: el token de GitHub con mínimo privilegio.
-- Actions fijadas por **SHA de commit** en lugar de tags mutables, con `persist-credentials: false`.
-- `concurrency` para cancelar ejecuciones obsoletas, y `timeout-minutes`.
-- [Dependabot](.github/dependabot.yml) mantiene al día `aws-cdk-lib`/`cdk-nag` (agrupados) y las actions.
-- No requiere credenciales de AWS: el análisis es 100% estático.
+- `permissions: contents: read`: a least-privilege GitHub token.
+- Actions pinned by **commit SHA** instead of mutable tags, with `persist-credentials: false`.
+- `concurrency` to cancel stale runs, plus `timeout-minutes`.
+- [Dependabot](.github/dependabot.yml) keeps `aws-cdk-lib`/`cdk-nag` (grouped) and the actions up to date.
+- No AWS credentials required: the analysis is 100% static.
 
-## Lecciones aprendidas
+## Lessons Learned
 
-Cosas que solo aparecieron al construir esto de verdad, y que conviene saber antes de adoptar cdk-nag en un equipo:
+Things that only surfaced while building this for real, and that are worth knowing before rolling out cdk-nag across a team:
 
-1. **Pasar cdk-nag no significa que funcione.** La primera versión de `SecureStack` pasaba todas las reglas, pero la Lambda de rotación no podía llegar a Secrets Manager: el endpoint tenía `open: false` y ninguna regla de entrada. cdk-nag revisa lo que **sobra** (permisos abiertos), no lo que **falta** (conectividad). Lo detectó un test de `Template`, no cdk-nag.
-2. **Remediar una regla puede destapar otra.** El endpoint "abierto" por defecto hacía que `AwsSolutions-EC23` lanzara un error al evaluarse (la regla de entrada usa el CIDR de la VPC, un valor intrínseco). La solución correcta (abrirlo solo al security group de la rotación) también es la más segura.
-3. **El ejemplo clásico de IAM5 sigue disparando IAM5.** `arnForObjects('*')` o `'uploads/*'` siempre termina en `*`. Hay que asumirlo y reconocer el hallazgo concreto con una razón, no fingir que "ya está remediado".
-4. **El rol por defecto de Lambda es un IAM4 escondido.** Un rol propio con `logGroup.grantWrite(role)` elimina la política administrada y acota los permisos de logs a un log group.
-5. **Prueba también el "antes".** Un test que confirma que el stack inseguro sigue fallando protege al tutorial (y a tus reglas internas) de cambios silenciosos en nuevas versiones de cdk-nag.
+1. **Passing cdk-nag does not mean it works.** The first version of `SecureStack` passed every rule, but the rotation Lambda could not reach Secrets Manager: the endpoint had `open: false` and no ingress rule. cdk-nag checks for what is **excessive** (open permissions), not for what is **missing** (connectivity). A `Template` test caught it, not cdk-nag.
+2. **Remediating one rule can expose another.** The endpoint's default "open" setting caused `AwsSolutions-EC23` to throw an error during evaluation (the ingress rule uses the VPC CIDR, an intrinsic value). The correct fix (opening it only to the rotation security group) is also the most secure one.
+3. **The textbook IAM5 example still triggers IAM5.** `arnForObjects('*')` or `'uploads/*'` always ends in `*`. Accept it and acknowledge the specific finding with a reason, rather than pretending it is "already remediated".
+4. **The default Lambda role is a hidden IAM4.** A dedicated role with `logGroup.grantWrite(role)` removes the managed policy and scopes log permissions to a single log group.
+5. **Test the "before" too.** A test confirming that the insecure stack still fails protects the tutorial (and your internal rules) from silent behavior changes in new cdk-nag versions.
 
-## Desplegar (opcional) y costos
+## Deploying (Optional) and Costs
 
-El objetivo del tutorial es el análisis estático; **no hace falta desplegar nada**. Si quieres desplegar `SecureStack` en una cuenta de pruebas:
+The goal of this tutorial is static analysis; **you do not need to deploy anything**. If you want to deploy `SecureStack` to a sandbox account:
 
 ```bash
-npx cdk bootstrap   # una vez por cuenta/región
+npx cdk bootstrap   # once per account/Region
 npx cdk deploy SecureStack
 ```
 
-Ten en cuenta:
+Keep in mind:
 
-- **Genera costos**: RDS Multi-AZ (`db.t4g.micro` × 2) y un interface endpoint de Secrets Manager en 2 AZs se cobran por hora.
-- **No se borra con un solo `cdk destroy`**, a propósito: la base de datos tiene `deletionProtection: true` (y se queda con un snapshot final), y los buckets y log groups usan la política `RETAIN` por defecto. Primero hay que desactivar la protección y después vaciar y borrar los buckets a mano.
-- **Nunca despliegues `InsecureStack`**: contiene un bucket sin bloqueo de acceso público y un rol con `s3:*` sobre `*`.
+- **It incurs costs**: RDS Multi-AZ (`db.t4g.micro` × 2) and a Secrets Manager interface endpoint across 2 AZs are billed hourly.
+- **A single `cdk destroy` will not remove everything**, by design: the database has `deletionProtection: true` (and keeps a final snapshot), and the buckets and log groups use the default `RETAIN` removal policy. You must first disable deletion protection, then empty and delete the buckets manually.
+- **Never deploy `InsecureStack`**: it contains a bucket without public access blocking and a role with `s3:*` on `*`.
 
-## Estructura del repositorio
+## Repository Structure
 
 ```
 aws-cdk-nag-security-tutorial/
 ├── bin/
-│   └── app.ts                    # Punto de entrada: registra cdk-nag a nivel de App
+│   └── app.ts                    # Entry point: registers cdk-nag at the App level
 ├── lib/
-│   ├── insecure-stack.ts         # "Antes": fallas escritas a propósito
-│   └── secure-stack.ts           # "Después": mismas IDs, remediado
+│   ├── insecure-stack.ts         # "Before": deliberately introduced flaws
+│   └── secure-stack.ts           # "After": same IDs, remediated
 ├── test/
-│   ├── helpers.ts                # App con el context de cdk.json, validateScope, auditoría de supresiones
-│   ├── insecure-stack.test.ts    # cdk-nag detecta cada falla documentada
-│   ├── secure-stack.test.ts      # cdk-nag pasa + aserciones de cada remediación
-│   └── acknowledge.test.ts       # Comportamiento de Validations.acknowledge()
+│   ├── helpers.ts                # App with cdk.json context, validateScope, suppression audit
+│   ├── insecure-stack.test.ts    # cdk-nag detects every documented flaw
+│   ├── secure-stack.test.ts      # cdk-nag passes + assertions for each remediation
+│   └── acknowledge.test.ts       # Validations.acknowledge() behavior
 ├── .github/
 │   ├── workflows/
 │   │   └── cdk-nag-check.yml     # CI: typecheck, tests, cdk synth
 │   └── dependabot.yml
 ├── cdk.json
-├── jest.config.js                # Umbral de cobertura del 100%
+├── jest.config.js                # 100% coverage threshold
 ├── package.json
 ├── tsconfig.json
 └── README.md
 ```
 
-## Recursos adicionales
+## Additional Resources
 
-- Repositorio oficial de cdk-nag: <https://github.com/cdklabs/cdk-nag>
-- Lista completa de reglas de `AwsSolutionsChecks`: <https://github.com/cdklabs/cdk-nag/blob/main/RULES.md>
-- Guía de migración de cdk-nag 2.x a 3.x: sección *Migrating from v2* del [README de cdk-nag](https://github.com/cdklabs/cdk-nag#readme)
-- AWS CDK — pruebas de infraestructura: <https://docs.aws.amazon.com/cdk/v2/guide/testing.html>
-- AWS Prescriptive Guidance — buenas prácticas de seguridad para CDK: <https://docs.aws.amazon.com/prescriptive-guidance/latest/best-practices-cdk-typescript-iac/>
+- Official cdk-nag repository: <https://github.com/cdklabs/cdk-nag>
+- Full list of `AwsSolutionsChecks` rules: <https://github.com/cdklabs/cdk-nag/blob/main/RULES.md>
+- cdk-nag 2.x to 3.x migration guide: the *Migrating from v2* section of the [cdk-nag README](https://github.com/cdklabs/cdk-nag#readme)
+- AWS CDK — testing infrastructure: <https://docs.aws.amazon.com/cdk/v2/guide/testing.html>
+- AWS Prescriptive Guidance — security best practices for CDK: <https://docs.aws.amazon.com/prescriptive-guidance/latest/best-practices-cdk-typescript-iac/>
 
-## Licencia
+## License
 
 [MIT](LICENSE)

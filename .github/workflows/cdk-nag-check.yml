@@ -6,22 +6,22 @@ on:
   pull_request:
     branches: [main]
 
-# Mínimo privilegio: el job solo necesita leer el repositorio.
+# Least privilege: the job only needs to read the repository.
 permissions:
   contents: read
 
-# Cancela ejecuciones anteriores del mismo branch / PR.
+# Cancel earlier runs for the same branch / PR.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   security-scan:
-    name: Typecheck, tests y cdk-nag
+    name: Typecheck, tests and cdk-nag
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      # Actions fijadas por SHA de commit (no por tag mutable); Dependabot las actualiza.
+      # Actions pinned by commit SHA (not by a mutable tag); Dependabot keeps them updated.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -31,28 +31,28 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Instalar dependencias
+      - name: Install dependencies
         run: npm ci
 
       - name: Typecheck
         run: npm run build
 
-      # Incluye validateScope() de cdk-nag sobre ambos stacks, más un umbral
-      # de cobertura del 100% (jest.config.js).
-      - name: Tests (incluye cdk-nag)
+      # Includes cdk-nag validateScope() on both stacks, plus a 100% coverage
+      # threshold (jest.config.js).
+      - name: Tests (includes cdk-nag)
         run: npm test -- --coverage
 
-      # El paso que bloquea el merge: si cdk-nag reporta un error en
-      # SecureStack, `cdk synth` sale con código distinto de cero.
-      # No necesita credenciales de AWS ni Docker.
+      # The merge-blocking step: if cdk-nag reports an error in SecureStack,
+      # `cdk synth` exits non-zero.
+      # Requires neither AWS credentials nor Docker.
       - name: cdk synth (SecureStack)
         run: npx cdk synth --quiet
 
-      # Prueba que el stack "antes" SIGUE fallando: si un día pasara, el
-      # tutorial estaría mostrando fallas que cdk-nag ya no detecta.
-      - name: cdk synth (InsecureStack debe fallar)
+      # Proves the "before" stack STILL fails: if it ever passed, the tutorial
+      # would be showing flaws that cdk-nag no longer detects.
+      - name: cdk synth (InsecureStack must fail)
         run: |
           if npx cdk synth InsecureStack -c includeInsecure=true --quiet; then
-            echo "::error::InsecureStack pasó cdk-nag, pero debería fallar."
+            echo "::error::InsecureStack passed cdk-nag, but it should fail."
             exit 1
           fi

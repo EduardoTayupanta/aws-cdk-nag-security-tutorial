@@ -16,25 +16,24 @@ import {
 } from 'aws-cdk-lib/aws-ec2';
 import { DatabaseInstance, DatabaseInstanceEngine, PostgresEngineVersion } from 'aws-cdk-lib/aws-rds';
 
-/** Prefijo del bucket que la Lambda puede leer; nada fuera de él. */
+/** Bucket prefix the Lambda can read; nothing outside it. */
 export const READABLE_PREFIX = 'uploads/';
 
 /**
- * El "DESPUÉS" del tutorial: los mismos recursos que `InsecureStack`, con los
- * mismos IDs de construct, remediados para pasar el paquete de reglas
- * AwsSolutions de cdk-nag.
+ * The tutorial's "AFTER": the same resources as `InsecureStack`, with the same
+ * construct IDs, remediated to pass cdk-nag's AwsSolutions rule pack.
  *
- * Solo queda UNA excepción reconocida (`Validations.of(...).acknowledge`), con
- * su justificación escrita junto al recurso. Todo lo demás se corrige en vez
- * de suprimirse.
+ * Only ONE acknowledged exception remains (`Validations.of(...).acknowledge`),
+ * with its justification written next to the resource. Everything else is
+ * fixed instead of suppressed.
  */
 export class SecureStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
 
     // ── S3: AwsSolutions-S1 / S2 / S10 ────────────────────────────────────
-    // El bucket de logs no necesita a su vez logging: la regla S1 reconoce a
-    // un bucket que ya es destino de access logs como compliant.
+    // The logs bucket does not need logging itself: rule S1 treats a bucket
+    // that is already an access-log destination as compliant.
     const accessLogsBucket = new Bucket(this, 'AccessLogsBucket', {
       encryption: BucketEncryption.S3_MANAGED,
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
@@ -54,12 +53,12 @@ export class SecureStack extends Stack {
     });
 
     // ── IAM: AwsSolutions-IAM4 / IAM5 ─────────────────────────────────────
-    // Rol propio en lugar del rol por defecto de Lambda: así no se adjunta la
-    // política administrada AWSLambdaBasicExecutionRole (IAM4) y los permisos
-    // de logs quedan acotados a UN log group concreto.
+    // A dedicated role instead of Lambda's default one: this avoids attaching
+    // the AWSLambdaBasicExecutionRole managed policy (IAM4) and scopes the log
+    // permissions to ONE specific log group.
     const appRole = new Role(this, 'AppRole', {
       assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
-      description: 'Rol de ReaderFunction: lectura de uploads/ y escritura en su propio log group.',
+      description: 'ReaderFunction role: read uploads/ and write to its own log group.',
     });
 
     const readerLogGroup = new LogGroup(this, 'ReaderLogGroup', {
@@ -67,30 +66,30 @@ export class SecureStack extends Stack {
     });
     readerLogGroup.grantWrite(appRole);
 
-    // Una sola acción, sobre un solo prefijo. `bucket.grantRead()` agregaría
-    // además s3:GetObject*, s3:GetBucket* y s3:List* (más hallazgos IAM5 que
-    // justificar); esta función solo necesita leer objetos.
+    // A single action on a single prefix. `bucket.grantRead()` would also add
+    // s3:GetObject*, s3:GetBucket* and s3:List* (more IAM5 findings to
+    // justify); this function only needs to read objects.
     appRole.addToPolicy(new PolicyStatement({
       sid: 'ReadUploadsPrefixOnly',
       actions: ['s3:GetObject'],
       resources: [dataBucket.arnForObjects(`${READABLE_PREFIX}*`)],
     }));
 
-    // La única excepción del stack. En cdk-nag 3.x cada hallazgo se reconoce
-    // por separado con su ID completo `Regla[Hallazgo]`: si mañana alguien
-    // agrega otro wildcard a este rol, cdk-nag lo vuelve a reportar.
+    // The stack's only exception. In cdk-nag 3.x each finding is acknowledged
+    // separately by its full `Rule[Finding]` ID: if someone later adds another
+    // wildcard to this role, cdk-nag reports it again.
     Validations.of(appRole).acknowledge({
       id: `AwsSolutions-IAM5[Resource::<${this.getLogicalId(dataBucket.node.defaultChild as CfnBucket)}.Arn>/${READABLE_PREFIX}*]`,
       reason:
-        `El "*" es el alcance por prefijo deliberado: la función solo puede ejecutar s3:GetObject ` +
-        `sobre objetos bajo ${READABLE_PREFIX} de este bucket. S3 no permite enumerar las keys de ` +
-        'antemano (se crean en tiempo de ejecución), por lo que un prefijo es el alcance más ' +
-        'estrecho posible para lectura de objetos.',
+        'The "*" is the deliberate prefix scope: the function can only call s3:GetObject ' +
+        `on objects under ${READABLE_PREFIX} in this bucket. S3 object keys are created at runtime ` +
+        'and cannot be enumerated in advance, so a prefix is the narrowest possible scope for ' +
+        'object reads.',
     });
 
     // ── Lambda: AwsSolutions-L1 ───────────────────────────────────────────
-    // Runtime fijado explícitamente (no NODEJS_LATEST, cuyo valor puede cambiar
-    // entre versiones de aws-cdk-lib y alterar el template sin aviso).
+    // Runtime pinned explicitly (not NODEJS_LATEST, whose value can change
+    // between aws-cdk-lib releases and silently alter the template).
     new Function(this, 'ReaderFunction', {
       runtime: Runtime.NODEJS_24_X,
       handler: 'index.handler',
@@ -110,9 +109,9 @@ export class SecureStack extends Stack {
     });
 
     // ── VPC: AwsSolutions-VPC7 ────────────────────────────────────────────
-    // Solo subnets aisladas y sin NAT Gateway: la base de datos no necesita
-    // salir a internet. Lo único que debe alcanzar es Secrets Manager (para
-    // la rotación de credenciales), vía VPC endpoint.
+    // Isolated subnets only and no NAT Gateway: the database does not need
+    // internet egress. The only thing it must reach is Secrets Manager (for
+    // credential rotation), through a VPC endpoint.
     const vpc = new Vpc(this, 'AppVpc', {
       maxAzs: 2,
       natGateways: 0,
@@ -125,8 +124,8 @@ export class SecureStack extends Stack {
         },
       },
     });
-    // `open: false` evita la regla de entrada por defecto (todo el CIDR de la
-    // VPC); más abajo se abre solo a la Lambda de rotación (AwsSolutions-EC23).
+    // `open: false` skips the default ingress rule (the whole VPC CIDR); it is
+    // opened below to the rotation Lambda only (AwsSolutions-EC23).
     const secretsManagerEndpoint = vpc.addInterfaceEndpoint('SecretsManagerEndpoint', {
       service: InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
       subnets: { subnetType: SubnetType.PRIVATE_ISOLATED },
@@ -142,19 +141,19 @@ export class SecureStack extends Stack {
       storageEncrypted: true, // RDS2
       deletionProtection: true, // RDS10
       multiAz: true, // RDS3
-      port: 5433, // RDS11: puerto distinto al por defecto (5432)
+      port: 5433, // RDS11: non-default port (default is 5432)
       iamAuthentication: true,
       backupRetention: Duration.days(7),
       cloudwatchLogsExports: ['postgresql'],
     });
-    // SMG4: rotación automática de la contraseña maestra.
-    // La Lambda de rotación corre en la VPC con su propio security group, y el
-    // endpoint de Secrets Manager se abre (443) SOLO a ese security group.
-    // Ojo: la opción `endpoint` solo cambia la URL que usa la Lambda; no abre
-    // el security group del endpoint, por eso la regla se agrega aquí.
+    // SMG4: automatic rotation of the master password.
+    // The rotation Lambda runs in the VPC with its own security group, and the
+    // Secrets Manager endpoint is opened (443) ONLY to that security group.
+    // Note: the `endpoint` option only changes the URL the Lambda uses; it does
+    // not open the endpoint's security group, which is why the rule is added here.
     const rotationSecurityGroup = new SecurityGroup(this, 'RotationSecurityGroup', {
       vpc,
-      description: 'Lambda de rotacion del secreto de AppDatabase',
+      description: 'Rotation Lambda for the AppDatabase secret',
     });
     secretsManagerEndpoint.connections.allowDefaultPortFrom(rotationSecurityGroup);
     database.addRotationSingleUser({

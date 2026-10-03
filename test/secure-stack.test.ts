@@ -8,17 +8,17 @@ describe('SecureStack', () => {
 
   // ── cdk-nag ──────────────────────────────────────────────────────────────
 
-  test('pasa el paquete AwsSolutions (cdk-nag) sin violaciones', () => {
+  test('passes the AWS Solutions (cdk-nag) rule pack with no violations', () => {
     const report = runAwsSolutions(stack);
     if (!report.success) {
-      // Fallar mostrando las violaciones reales, no solo "false !== true".
-      throw new Error(`Violaciones AwsSolutions:\n${JSON.stringify(report.violations, null, 2)}`);
+      // Fail with the actual violations, not just "false !== true".
+      throw new Error(`AwsSolutions violations:\n${JSON.stringify(report.violations, null, 2)}`);
     }
     expect(report.success).toBe(true);
   });
 
-  test('tiene UNA sola supresión, acotada al hallazgo IAM5 del prefijo uploads/', () => {
-    // Si alguien agrega otra supresión, este test obliga a revisarla aquí.
+  test('has exactly ONE suppression, scoped to the IAM5 finding for the uploads/ prefix', () => {
+    // If someone adds another suppression, this test forces it to be reviewed here.
     const acks = nagAcknowledgmentsIn(stack);
     expect(acks).toEqual([
       {
@@ -32,7 +32,7 @@ describe('SecureStack', () => {
 
   // ── S3: S1 / S2 / S10 ───────────────────────────────────────────────────
 
-  test('el bucket de datos bloquea acceso público, cifra y envía access logs al bucket de logs', () => {
+  test('the data bucket blocks public access, is encrypted, and sends access logs to the logs bucket', () => {
     template.hasResourceProperties('AWS::S3::Bucket', Match.objectLike({
       PublicAccessBlockConfiguration: {
         BlockPublicAcls: true,
@@ -52,7 +52,7 @@ describe('SecureStack', () => {
     }));
   });
 
-  test('ambos buckets rechazan peticiones sin TLS', () => {
+  test('both buckets reject requests without TLS', () => {
     template.resourcePropertiesCountIs('AWS::S3::BucketPolicy', Match.objectLike({
       PolicyDocument: Match.objectLike({
         Statement: Match.arrayWith([
@@ -68,7 +68,7 @@ describe('SecureStack', () => {
 
   // ── IAM: IAM4 / IAM5 ────────────────────────────────────────────────────
 
-  test('el rol de la app no tiene políticas administradas de AWS', () => {
+  test('the app role has no AWS managed policies', () => {
     template.hasResourceProperties('AWS::IAM::Role', Match.objectLike({
       AssumeRolePolicyDocument: Match.objectLike({
         Statement: [Match.objectLike({ Principal: { Service: 'lambda.amazonaws.com' } })],
@@ -77,7 +77,7 @@ describe('SecureStack', () => {
     }));
   });
 
-  test(`el rol solo puede hacer s3:GetObject bajo ${READABLE_PREFIX}`, () => {
+  test(`the role can only call s3:GetObject under ${READABLE_PREFIX}`, () => {
     template.hasResourceProperties('AWS::IAM::Policy', Match.objectLike({
       Roles: [{ Ref: Match.stringLikeRegexp('^AppRole') }],
       PolicyDocument: Match.objectLike({
@@ -98,7 +98,7 @@ describe('SecureStack', () => {
     }));
   });
 
-  test('ninguna política del stack concede acciones con wildcard de servicio (p. ej. s3:*)', () => {
+  test('no policy in the stack grants service-wide wildcard actions (e.g. s3:*)', () => {
     const policies = template.findResources('AWS::IAM::Policy');
     const actions = Object.values(policies).flatMap((p) =>
       p.Properties.PolicyDocument.Statement.flatMap((s: { Action: string | string[] }) => [s.Action].flat()),
@@ -108,7 +108,7 @@ describe('SecureStack', () => {
 
   // ── Lambda: L1 ──────────────────────────────────────────────────────────
 
-  test('ReaderFunction usa el runtime Node.js más reciente y su propio log group', () => {
+  test('ReaderFunction uses the latest Node.js runtime and its own log group', () => {
     template.hasResourceProperties('AWS::Lambda::Function', Match.objectLike({
       Runtime: 'nodejs24.x',
       Role: { 'Fn::GetAtt': [Match.stringLikeRegexp('^AppRole'), 'Arn'] },
@@ -118,7 +118,7 @@ describe('SecureStack', () => {
 
   // ── VPC: VPC7 ───────────────────────────────────────────────────────────
 
-  test('la VPC envía Flow Logs de todo el tráfico a CloudWatch Logs', () => {
+  test('the VPC sends Flow Logs for all traffic to CloudWatch Logs', () => {
     template.hasResourceProperties('AWS::EC2::FlowLog', Match.objectLike({
       ResourceId: { Ref: Match.stringLikeRegexp('^AppVpc') },
       ResourceType: 'VPC',
@@ -127,21 +127,21 @@ describe('SecureStack', () => {
     }));
   });
 
-  test('la VPC no tiene NAT Gateway ni Internet Gateway', () => {
+  test('the VPC has no NAT Gateway or Internet Gateway', () => {
     template.resourceCountIs('AWS::EC2::NatGateway', 0);
     template.resourceCountIs('AWS::EC2::InternetGateway', 0);
   });
 
-  test('el endpoint de Secrets Manager solo acepta tráfico desde la Lambda de rotación (EC23)', () => {
-    // Sin reglas de entrada por CIDR: ni la VPC entera ni 0.0.0.0/0.
+  test('the Secrets Manager endpoint only accepts traffic from the rotation Lambda (EC23)', () => {
+    // No CIDR-based ingress rules: neither the whole VPC nor 0.0.0.0/0.
     const endpointSgs = template.findResources('AWS::EC2::SecurityGroup', {
       Properties: { GroupDescription: Match.stringLikeRegexp('SecretsManagerEndpoint') },
     });
     const [endpointSgId] = Object.keys(endpointSgs);
     expect(endpointSgs[endpointSgId].Properties.SecurityGroupIngress).toBeUndefined();
 
-    // Regresión: sin esta regla la rotación falla en runtime (no puede llamar
-    // a Secrets Manager) y ni cdk-nag ni el synth lo detectan.
+    // Regression: without this rule rotation fails at runtime (it cannot reach
+    // Secrets Manager), and neither cdk-nag nor synth catches it.
     template.resourcePropertiesCountIs('AWS::EC2::SecurityGroupIngress', Match.objectLike({
       GroupId: { 'Fn::GetAtt': [endpointSgId, 'GroupId'] },
     }), 1);
@@ -161,7 +161,7 @@ describe('SecureStack', () => {
 
   // ── RDS: RDS2 / RDS3 / RDS10 / RDS11 / SMG4 ─────────────────────────────
 
-  test('la base de datos está cifrada, protegida contra borrado, en Multi-AZ y en un puerto no estándar', () => {
+  test('the database is encrypted, deletion-protected, Multi-AZ, and on a non-standard port', () => {
     template.hasResourceProperties('AWS::RDS::DBInstance', Match.objectLike({
       StorageEncrypted: true,
       DeletionProtection: true,
@@ -174,7 +174,7 @@ describe('SecureStack', () => {
     }));
   });
 
-  test('la contraseña maestra de la base de datos rota automáticamente', () => {
+  test('the database master password rotates automatically', () => {
     template.hasResourceProperties('AWS::SecretsManager::RotationSchedule', Match.objectLike({
       SecretId: { Ref: Match.stringLikeRegexp('^AppDatabaseSecret') },
       RotationRules: Match.objectLike({ ScheduleExpression: 'rate(30 days)' }),

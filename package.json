@@ -1,7 +1,7 @@
 {
   "name": "aws-cdk-nag-security-tutorial",
   "version": "1.0.0",
-  "description": "Tutorial paso a paso de análisis estático de seguridad en AWS CDK con cdk-nag: un stack inseguro, su versión remediada y tests que prueban cada remediación.",
+  "description": "Step-by-step tutorial on static security analysis for AWS CDK with cdk-nag: an insecure stack, its remediated version, and tests that prove every remediation.",
   "private": true,
   "license": "MIT",
   "scripts": {
