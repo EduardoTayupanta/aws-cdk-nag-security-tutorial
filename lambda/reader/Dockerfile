@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- Build stage: install deps and bundle the TypeScript handler ----
-FROM public.ecr.aws/docker/library/node:22-slim AS build
+FROM public.ecr.aws/docker/library/node:26-slim AS build
 WORKDIR /build
 COPY package.json package-lock.json ./
 RUN npm ci
